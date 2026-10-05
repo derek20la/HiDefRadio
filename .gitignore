@@ -1,0 +1,30 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+# Kotlin compiler cache (added in 9f)
+.kotlin
+# 14b: the signing key and its passwords must NEVER be committed
+keystore.properties
+*.jks
+*.keystore
+# 14b: finished release files (Android Studio's "Generate Signed App Bundle" puts them in app/release)
+/app/release/
+*.aab
+*.apk
+
+# Scratch files saved from the development chats (old notes, draft pictures) - not part of the app
+/Claude outputs/
+# Android Studio's note of which phone the app was last run on (it holds the phone's serial number)
+/.idea/deploymentTargetSelector.xml

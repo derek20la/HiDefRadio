@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M10a: Google's Material "play_arrow" icon (Apache License 2.0), for the media
+     notification and the ⏸/▶ button. White: Android colors it itself in the
+     notification; the app screen tints it (app:tint in activity_main.xml). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M8,5v14l11,-7z" />
+</vector>

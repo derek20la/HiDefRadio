@@ -1,0 +1,78 @@
+HiDef Radio
+Copyright (C) 2026 Derek (github.com/derek20la)
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Source code: https://github.com/derek20la/HiDefRadio
+
+"HD Radio" is a trademark of iBiquity Digital Corporation, an Xperi company. HiDef Radio is an independent hobby project and is not affiliated with or endorsed by Xperi or iBiquity.
+
+
+BUILT-IN LIBRARIES
+(Their source code is included in the HiDef Radio repository, under app/src/main/cpp/external.)
+
+nrsc5 v3.2.0 — the HD Radio (NRSC-5) decoder
+https://github.com/theori-io/nrsc5
+License: GNU GPL version 3 or later
+
+librtlsdr (RTL-SDR Blog fork) — talks to the RTL-SDR dongle
+Copyright (C) 2012-2014 Steve Markgraf, Dimitri Stolnikov, and others
+https://github.com/rtlsdrblog/rtl-sdr-blog
+License: GNU GPL version 2 or later
+Changed for HiDef Radio: added rtlsdr_open_fd(), so the dongle can be opened with the USB permission Android gives the app (marked "HiDef Radio patch" in the source).
+
+libusb 1.0.30 — USB access
+Copyright (C) 2001 Johannes Erdfelt, 2007-2008 Daniel Drake, 2012-2023 Nathan Hjelm, and others
+https://libusb.info
+License: GNU LGPL version 2.1 or later
+
+FFTW 3.3.10 — Fast Fourier Transforms
+Copyright (C) 2003, 2007-14 Matteo Frigo and Massachusetts Institute of Technology
+https://www.fftw.org
+License: GNU GPL version 2 or later
+
+FAAD2 2.11.2 — AAC audio decoder
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+https://github.com/knik0/faad2
+License: GNU GPL version 2 or later
+Changed: nrsc5's HD Radio (HDC) patch is applied (faad2-hdc-support.patch from nrsc5).
+
+
+FONT AND ICONS
+
+DSEG7 Classic font — the frequency display
+Copyright (c) 2017 keshikan (www.keshikan.net), with Reserved Font Name "DSEG"
+https://www.keshikan.net/fonts-e.html
+License: SIL Open Font License 1.1
+
+Material icons "settings", "play arrow", "pause", "skip previous", "skip next", "stop" (the ⚙ button and the media buttons)
+Copyright Google LLC
+https://fonts.google.com/icons
+License: Apache License 2.0
+
+
+DATA
+
+Station list (call letters, city of license, coordinates, power) — the "Station" row in the signal details
+From the FCC's FM Query and AM Query (Federal Communications Commission, www.fcc.gov)
+United States government data, in the public domain. The list in the app is a snapshot; its date is shown under Settings, About.
+
+
+ANDROID LIBRARIES
+
+AndroidX (Core, AppCompat, Preference, ConstraintLayout) and Material Components for Android
+Copyright The Android Open Source Project / Google LLC
+License: Apache License 2.0
+
+Kotlin standard library
+Copyright JetBrains s.r.o. and Kotlin Programming Language contributors
+License: Apache License 2.0
+
+
+THANKS
+
+nrsc5-dui by Mark J. Fine (GPL-3.0) and the SDRSharp NRSC5 plugin (GPL-3.0) — ideas borrowed: logo cache, telling logos from album art, signal details, sync-loss grace period, smooth program switching.
+
+redsea by Oona Räisänen (MIT) — used to cross-check the RDS call-letter and character tables. No code taken.

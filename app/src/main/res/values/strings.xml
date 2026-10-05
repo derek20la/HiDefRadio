@@ -1,0 +1,258 @@
+<resources>
+    <string name="app_name">HiDef Radio</string>
+
+    <!-- Milestone 9a: tuning -->
+    <string name="tune">Tune</string>
+    <string name="mhz">MHz</string>
+    <string name="khz">kHz</string>   <!-- 9c: AM -->
+    <string name="tune_down">Tune down</string>
+    <string name="tune_up">Tune up</string>
+    <!-- 9e: %1$s = the range of your FM band, e.g. "87.5–108.0" -->
+    <string name="bad_frequency">Enter FM %1$s MHz, or AM %2$s kHz (%3$d kHz steps)</string>
+
+    <!-- Milestone 9b step 3b: renaming a program (long-press its button) -->
+    <string name="rename_title">Rename %1$s</string>
+    <string name="rename_message">Your name for this program. Leave it empty to use the station\'s name.</string>
+    <string name="rename_save">Save</string>
+    <string name="rename_reset">Station name</string>
+
+    <!-- Milestone 9d: now-playing screen -->
+    <string name="vfd_description">Frequency display. Tap to type a frequency.</string>
+    <string name="vfd_hd">HD</string>
+    <string name="enter_frequency">Tune to</string>
+    <string name="enter_frequency_message">FM in MHz (e.g. 101.1) or AM in kHz (e.g. 1260)</string>
+    <string name="show_debug">Show debug info</string>
+    <string name="hide_debug">Hide debug info</string>
+    <string name="signal_off">Radio off</string>
+    <string name="signal_searching">Searching for HD… %1$s</string>
+    <string name="signal_searching_am">AM is HD only - searching for the digital signal… %1$s</string>   <!-- 9c -->
+    <string name="signal_lost">HD signal lost</string>
+    <string name="signal_weak">weak</string>   <!-- M10c step 3: synced, but the audio breaks up -->
+    <string name="signal_analog">Analog FM</string>   <!-- M11: playing our FM demodulator -->
+    <string name="signal_noise">noise</string>   <!-- 9k: FM quieting says only noise here (was "no station" by carrier level) -->
+    <string name="signal_stereo">ST</string>   <!-- 11b: the tuner display's stereo indicator (at least half the stereo is playing) -->
+    <string name="signal_blending_hd">blending → HD</string>       <!-- 11d: the crossfade runs -->
+    <string name="signal_blending_analog">blending → analog</string>
+    <string name="signal_hd_mismatch">HD ≠ analog</string>          <!-- 11d: the HD is another station's -->
+    <string name="signal_rds">RDS</string>
+    <string name="signal_hd_off">HD off</string>   <!-- 12a step 3: Analog only switches the HD decoder off -->   <!-- M12 step 2: the tuner display's RDS light (station identified, data flowing) -->
+    <!-- M12 step 2: the HD on this frequency is ANOTHER station's (RDS PI vs the HD call sign). Tap = listen to the other one. -->
+    <string name="other_hd_listen">⚠ The HD here is %1$s (another station) - tap to listen</string>
+    <string name="other_analog_listen">⚠ The analog here is %1$s (another station) - tap to listen</string>
+    <string name="other_analog_listen_unnamed">⚠ The analog here is another station - tap to listen</string>
+    <string name="now_image">Album art or station logo</string>
+    <string name="station_logo">Station logo</string>
+
+    <!-- Milestone 9e step 1: presets. 13a step 2: on screen they are called "favorites"
+         (Derek: the ☆ = a favorite; "preset" sounds old). The code still says preset. -->
+    <string name="preset_hint">No favorites yet. Tap ☆ next to the station name to add one.</string>
+    <string name="preset_add">Add to favorites</string>
+    <string name="preset_remove">Remove from favorites</string>
+    <string name="preset_saved">Added %1$s to favorites</string>
+    <string name="preset_removed">Removed %1$s from favorites</string>
+    <string name="undo">Undo</string>
+    <string name="preset_rename">Rename</string>
+    <!-- 13a: the tiles are moved by holding and dragging; a line in the Rename / Delete menu. -->
+    <string name="preset_drag_tip">To change the order, hold a tile and drag it.</string>
+    <string name="preset_delete">Delete</string>
+    <string name="preset_rename_message">Your name for this favorite. Leave it empty to use the station\'s name.</string>
+
+    <!-- Milestone 9e step 2: settings -->
+    <string name="settings">Settings</string>
+    <string name="settings_reception">Reception</string>
+    <string name="settings_audio">Audio</string>
+    <string name="settings_display">Display</string>                  <!-- 9h -->
+    <string name="setting_theme">Theme</string>
+    <string name="setting_gain">Tuner gain</string>
+    <string name="gain_auto">Auto (recommended)</string>
+    <string name="setting_gain_help">Auto measures the signal when you tune, keeps adjusting while you listen, and remembers what worked for each station. With a manual gain, open the signal details and keep Peak below about −3 dBFS; higher MER is better.</string>
+    <string name="setting_band">Band (region)</string>
+    <string name="setting_focus">When another app plays sound</string>
+
+    <!-- Milestone 9e step 3 -->
+    <string name="start_radio">▶  Start radio</string>
+    <string name="overload">overload! Lower the gain</string>
+    <string name="overload_auto">overload! Lowering the gain…</string>   <!-- M10c: auto gain fixes it itself -->
+    <!-- 14c: direct sampling (a V3-type dongle on AM): the tuner is bypassed, so there is no gain -->
+    <string name="overload_direct">overload! Try a shorter antenna</string>
+    <string name="gain_direct">none - direct sampling (the tuner is bypassed on AM)</string>
+
+    <!-- Milestone 10a: media notification, pause -->
+    <string name="pause">Pause</string>
+    <string name="play">Play</string>
+    <string name="previous">Previous favorite</string>
+    <string name="next">Next favorite</string>
+    <string name="stop">Stop</string>
+    <string name="setting_pause_stop">Stop the radio after pausing for</string>
+    <string name="setting_hd_mode">HD Radio</string>   <!-- M11 -->
+    <string name="setting_hd_mode_help">Auto plays the analog FM at once and blends to the HD audio when it is good, like a car radio - and back before a dropout. Digital only is HD only (silence without HD). Analog only switches the HD decoder off (saves battery). AM stations are always HD only.</string>   <!-- 11d; 12a step 3 -->
+    <string name="setting_fm_stereo">FM stereo</string>   <!-- 11b step 2 -->
+    <string name="setting_fm_stereo_help">Auto blends to mono as the signal gets noisy, like a car radio (ST on the signal line = stereo). Always mono cuts the hiss of weak DX stations.</string>
+    <string name="setting_hd_mismatch">If the HD signal is another station\'s</string>   <!-- 11d: Auto only -->
+
+    <!-- Milestone 9f: About (bottom of the settings screen) -->
+    <!-- 13a step 2: Settings > Storage -->
+    <string name="settings_storage">Storage</string>
+    <string name="setting_clear">Clear saved data</string>
+    <string name="setting_clear_summary">%1$d station logos (%2$s), tuner gain remembered for %3$d stations. Your favorites, names and settings are kept.</string>
+    <string name="clear_logos">Station logos: %1$d (%2$s)</string>
+    <string name="clear_gains">Remembered tuner gains: %1$d</string>
+    <string name="clear_button">Clear</string>
+    <string name="clear_done">Cleared</string>
+    <string name="clear_nothing">Nothing selected</string>
+    <string name="settings_about">About</string>
+    <!-- %1$s = version name from build.gradle.kts, e.g. "1.0" -->
+    <string name="about_version">Version %1$s (build %2$d)</string>
+    <string name="about_installed">Installed %1$s</string>
+    <string name="about_license">Free software (GNU GPL v3 or later)</string>
+    <string name="about_license_summary">Comes with ABSOLUTELY NO WARRANTY. Tap to read the license.</string>
+    <string name="about_source">Source code</string>
+    <string name="source_url" translatable="false">https://github.com/derek20la/HiDefRadio</string>
+    <string name="source_url_short" translatable="false">github.com/derek20la/HiDefRadio</string>
+    <string name="about_licenses">Open-source licenses</string>
+    <string name="about_licenses_summary">nrsc5, librtlsdr, libusb, FFTW, FAAD2, DSEG font, AndroidX</string>
+    <!-- 13b: the built-in station list. %1$s = "FCC data of 2026-10-01" -->
+    <string name="about_stations">Station list</string>
+    <string name="about_stations_summary">%1$s (US, Canada, Mexico). Built in - names stations without going online.</string>
+    <!-- 14c: the privacy policy (Settings > About). The full text is the web page at privacy_url. -->
+    <string name="about_privacy">Privacy policy</string>
+    <string name="about_privacy_summary">Collects nothing. The app has no internet access. Tap to read.</string>
+    <string name="about_privacy_text">HiDef Radio does not collect, send or share any personal data. It has no internet permission, so it could not.\n\nYour favorites, station names, settings, station logos and remembered tuner gains are kept on this phone only. Settings > Clear saved data, clearing the app\'s storage or uninstalling removes them. If Android\'s own backup is switched on, Android may include them in the backup in your Google account.\n\nNo account, no ads, no tracking.\n\nThe full policy: %1$s</string>
+    <string name="about_privacy_open">Open the web page</string>
+    <string name="privacy_url" translatable="false">https://github.com/derek20la/hidefradio-privacy</string>
+    <string name="privacy_url_short" translatable="false">github.com/derek20la/hidefradio-privacy</string>
+    <string name="no_browser">No web browser found</string>
+    <string name="close">Close</string>
+
+    <!-- 9f: the list under "Open-source licenses". Same order as license_files. -->
+    <string-array name="license_names">
+        <item>Credits and notices</item>
+        <item>GNU GPL v3 (HiDef Radio, nrsc5)</item>
+        <item>GNU GPL v2 (librtlsdr, FFTW, FAAD2)</item>
+        <item>GNU LGPL v2.1 (libusb)</item>
+        <item>Apache 2.0 (AndroidX, Material, Kotlin)</item>
+        <item>SIL Open Font License 1.1 (DSEG font)</item>
+    </string-array>
+    <!-- Files in app/src/main/assets/licenses/ -->
+    <string-array name="license_files" translatable="false">
+        <item>NOTICES.txt</item>
+        <item>GPL-3.0.txt</item>
+        <item>GPL-2.0.txt</item>
+        <item>LGPL-2.1.txt</item>
+        <item>Apache-2.0.txt</item>
+        <item>DSEG-LICENSE.txt</item>
+    </string-array>
+
+    <string-array name="band_names">
+        <item>Americas (FM 87.75–107.9 MHz, 0.2 steps · AM 530–1700 kHz, 10 steps)</item>
+        <item>Europe and most of the world (FM 87.5–108.0, 0.1 · AM 531–1602, 9)</item>
+        <item>Japan (FM 76.0–99.0, 0.1 · AM 531–1602, 9)</item>
+        <item>Brazil (FM 76.1–107.9, 0.2 · AM 530–1700, 10)</item>
+    </string-array>
+    <!-- Must match FmBand.key, in the same order as band_names -->
+    <string-array name="band_keys" translatable="false">
+        <item>americas</item>
+        <item>world</item>
+        <item>japan</item>
+        <item>brazil</item>
+    </string-array>
+
+    <string-array name="focus_names">
+        <item>Mute the radio, un-mute after (recommended)</item>
+        <item>Stop the radio</item>
+        <item>Keep playing along with the other app</item>
+    </string-array>
+    <!-- Must match Settings.FOCUS_MUTE / FOCUS_STOP / FOCUS_MIX -->
+    <string-array name="focus_keys" translatable="false">
+        <item>mute</item>
+        <item>stop</item>
+        <item>mix</item>
+    </string-array>
+
+    <!-- M10a: auto-stop while paused (or another app took over the sound) -->
+    <string-array name="pause_stop_names">
+        <item>5 minutes</item>
+        <item>15 minutes</item>
+        <item>30 minutes</item>
+        <item>1 hour</item>
+        <item>Never</item>
+    </string-array>
+    <!-- Minutes; "0" = never. Must match Settings.pauseStopMinutes(). -->
+    <string-array name="pause_stop_keys" translatable="false">
+        <item>5</item>
+        <item>15</item>
+        <item>30</item>
+        <item>60</item>
+        <item>0</item>
+    </string-array>
+    <!-- M11: HD Radio mode. Must match Settings.HD_AUTO / HD_DIGITAL / HD_ANALOG. -->
+    <string-array name="hd_mode_names">
+        <item>Auto (analog, then HD)</item>
+        <item>Digital only</item>
+        <item>Analog only</item>
+    </string-array>
+    <string-array name="hd_mode_keys" translatable="false">
+        <item>auto</item>
+        <item>digital</item>
+        <item>analog</item>
+    </string-array>
+    <!-- 11d: Auto, and the HD never lines up with the analog (Settings.MISMATCH_*).
+         Rare: a distant station's HD on the same frequency. -->
+    <string-array name="hd_mismatch_names">
+        <item>Play the HD anyway</item>
+        <item>Stay on analog FM</item>
+    </string-array>
+    <string-array name="hd_mismatch_keys" translatable="false">
+        <item>hd</item>
+        <item>analog</item>
+    </string-array>
+
+    <!-- 11b step 2: FM stereo. Must match Settings.STEREO_AUTO / STEREO_MONO / STEREO_FULL. -->
+    <string-array name="fm_stereo_names">
+        <item>Auto (mono when noisy)</item>
+        <item>Always mono</item>
+        <item>Always stereo</item>
+    </string-array>
+    <string-array name="fm_stereo_keys" translatable="false">
+        <item>auto</item>
+        <item>mono</item>
+        <item>stereo</item>
+    </string-array>
+
+    <!-- 9h: Settings -> Display -> Theme -->
+    <string-array name="theme_names">
+        <item>Follow the phone</item>
+        <item>Light</item>
+        <item>Dark gray</item>
+        <item>True black (for OLED screens)</item>
+    </string-array>
+    <string-array name="theme_keys" translatable="false">
+        <item>system</item>
+        <item>light</item>
+        <item>dark</item>
+        <item>black</item>
+    </string-array>
+
+    <!-- 9j: Settings -> Audio -> Physical media buttons -->
+    <string name="setting_media_buttons">Physical media buttons</string>
+    <string name="setting_media_buttons_help">Headset, Bluetooth and car buttons, and the volume-key shortcuts some phones have (e.g. a long press to skip). The buttons in the app and in the notification always work.</string>
+    <string-array name="media_buttons_names">
+        <item>Control the radio</item>
+        <item>Play / pause only (no station changes)</item>
+        <item>Ignore them</item>
+    </string-array>
+    <string-array name="media_buttons_keys" translatable="false">
+        <item>all</item>
+        <item>playpause</item>
+        <item>none</item>
+    </string-array>
+
+    <!-- 9h: the line under the station name that says why there's no sound -->
+    <string name="hint_paused">⏸ Paused</string>
+    <string name="hint_paused_unplugged">⏸ Paused - headphones disconnected</string>
+    <string name="hint_muted_other_app">Muted - another app is playing. Tap ▶ to take the sound back</string>
+    <string name="hint_muted_interrupted">Muted for a moment - another app has the sound</string>
+    <string name="hint_stops_in">The radio turns off in %1$d min</string>
+    <string name="hint_plug_in">⚠ Plug in the RTL-SDR (USB-OTG cable)</string>
+    <string name="start_radio_icon">Start radio</string>
+</resources>

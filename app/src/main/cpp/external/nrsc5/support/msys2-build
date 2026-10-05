@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+set -e
+
+pacman -Su
+pacman -S --needed autoconf automake git gzip make ${MINGW_PACKAGE_PREFIX}-gcc ${MINGW_PACKAGE_PREFIX}-cmake ${MINGW_PACKAGE_PREFIX}-libtool patch tar xz
+
+cd ~
+if [ ! -d nrsc5 ]; then
+    git clone https://github.com/theori-io/nrsc5
+else
+    cd nrsc5
+    git pull
+    cd ~
+fi
+mkdir -p nrsc5/build
+cd nrsc5/build
+cmake -G "MSYS Makefiles" \
+    -D USE_STATIC=ON \
+    -D USE_SYSTEM_LIBUSB=OFF \
+    -D USE_SYSTEM_RTLSDR=OFF \
+    -D USE_SYSTEM_LIBAO=OFF \
+    -D USE_SYSTEM_FFTW=OFF \
+    -D USE_SSE=ON \
+    -D CMAKE_INSTALL_PREFIX=${MINGW_PREFIX} \
+    ..
+make $*
+make install

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 14b: only the DEV build (the one Android Studio installs) uses this file. It gives that
+     build its own name, so it can be told apart from the Google Play version next to it. -->
+<resources>
+    <string name="app_name">HiDef Radio dev</string>
+</resources>

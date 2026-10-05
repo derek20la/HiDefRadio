@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    USB devices HiDef Radio can use (RTL2832U-based SDR dongles).
+    Android uses this list to:
+      1. offer to open the app when one of these is plugged in, and
+      2. let us ask for permission to use it.
+    The IDs are copied from librtlsdr's known_devices[] list (librtlsdr.c).
+    Numbers are decimal; the hex values (as shown by "lsusb") are in the comments.
+    RTL-SDR Blog V3/V4 and most Nooelec dongles are 0x0bda:0x2838.
+-->
+<resources>
+    <!-- 0bda:2832  Generic RTL2832U -->
+    <usb-device vendor-id="3034" product-id="10290" />
+    <!-- 0bda:2838  Generic RTL2832U OEM -->
+    <usb-device vendor-id="3034" product-id="10296" />
+    <!-- 0413:6680  DigitalNow Quad DVB-T PCI-E card -->
+    <usb-device vendor-id="1043" product-id="26240" />
+    <!-- 0413:6f0f  Leadtek WinFast DTV Dongle mini D -->
+    <usb-device vendor-id="1043" product-id="28431" />
+    <!-- 0458:707f  Genius TVGo DVB-T03 USB dongle (Ver. B) -->
+    <usb-device vendor-id="1112" product-id="28799" />
+    <!-- 0ccd:00a9  Terratec Cinergy T Stick Black (rev 1) -->
+    <usb-device vendor-id="3277" product-id="169" />
+    <!-- 0ccd:00b3  Terratec NOXON DAB/DAB+ USB dongle (rev 1) -->
+    <usb-device vendor-id="3277" product-id="179" />
+    <!-- 0ccd:00b4  Terratec Deutschlandradio DAB Stick -->
+    <usb-device vendor-id="3277" product-id="180" />
+    <!-- 0ccd:00b5  Terratec NOXON DAB Stick - Radio Energy -->
+    <usb-device vendor-id="3277" product-id="181" />
+    <!-- 0ccd:00b7  Terratec Media Broadcast DAB Stick -->
+    <usb-device vendor-id="3277" product-id="183" />
+    <!-- 0ccd:00b8  Terratec BR DAB Stick -->
+    <usb-device vendor-id="3277" product-id="184" />
+    <!-- 0ccd:00b9  Terratec WDR DAB Stick -->
+    <usb-device vendor-id="3277" product-id="185" />
+    <!-- 0ccd:00c0  Terratec MuellerVerlag DAB Stick -->
+    <usb-device vendor-id="3277" product-id="192" />
+    <!-- 0ccd:00c6  Terratec Fraunhofer DAB Stick -->
+    <usb-device vendor-id="3277" product-id="198" />
+    <!-- 0ccd:00d3  Terratec Cinergy T Stick RC (Rev.3) -->
+    <usb-device vendor-id="3277" product-id="211" />
+    <!-- 0ccd:00d7  Terratec T Stick PLUS -->
+    <usb-device vendor-id="3277" product-id="215" />
+    <!-- 0ccd:00e0  Terratec NOXON DAB/DAB+ USB dongle (rev 2) -->
+    <usb-device vendor-id="3277" product-id="224" />
+    <!-- 1554:5020  PixelView PV-DT235U(RN) -->
+    <usb-device vendor-id="5460" product-id="20512" />
+    <!-- 15f4:0131  Astrometa DVB-T/DVB-T2 -->
+    <usb-device vendor-id="5620" product-id="305" />
+    <!-- 15f4:0133  HanfTek DAB+FM+DVB-T -->
+    <usb-device vendor-id="5620" product-id="307" />
+    <!-- 185b:0620  Compro Videomate U620F -->
+    <usb-device vendor-id="6235" product-id="1568" />
+    <!-- 185b:0650  Compro Videomate U650F -->
+    <usb-device vendor-id="6235" product-id="1616" />
+    <!-- 185b:0680  Compro Videomate U680F -->
+    <usb-device vendor-id="6235" product-id="1664" />
+    <!-- 1b80:d393  GIGABYTE GT-U7300 -->
+    <usb-device vendor-id="7040" product-id="54163" />
+    <!-- 1b80:d394  DIKOM USB-DVBT HD -->
+    <usb-device vendor-id="7040" product-id="54164" />
+    <!-- 1b80:d395  Peak 102569AGPK -->
+    <usb-device vendor-id="7040" product-id="54165" />
+    <!-- 1b80:d397  KWorld KW-UB450-T USB DVB-T Pico TV -->
+    <usb-device vendor-id="7040" product-id="54167" />
+    <!-- 1b80:d398  Zaapa ZT-MINDVBZP -->
+    <usb-device vendor-id="7040" product-id="54168" />
+    <!-- 1b80:d39d  SVEON STV20 DVB-T USB & FM -->
+    <usb-device vendor-id="7040" product-id="54173" />
+    <!-- 1b80:d3a4  Twintech UT-40 -->
+    <usb-device vendor-id="7040" product-id="54180" />
+    <!-- 1b80:d3a8  ASUS U3100MINI_PLUS_V2 -->
+    <usb-device vendor-id="7040" product-id="54184" />
+    <!-- 1b80:d3af  SVEON STV27 DVB-T USB & FM -->
+    <usb-device vendor-id="7040" product-id="54191" />
+    <!-- 1b80:d3b0  SVEON STV21 DVB-T USB & FM -->
+    <usb-device vendor-id="7040" product-id="54192" />
+    <!-- 1d19:1101  Dexatek DK DVB-T Dongle (Logilink VG0002A) -->
+    <usb-device vendor-id="7449" product-id="4353" />
+    <!-- 1d19:1102  Dexatek DK DVB-T Dongle (MSI DigiVox mini II V3.0) -->
+    <usb-device vendor-id="7449" product-id="4354" />
+    <!-- 1d19:1103  Dexatek Technology Ltd. DK 5217 DVB-T Dongle -->
+    <usb-device vendor-id="7449" product-id="4355" />
+    <!-- 1d19:1104  MSI DigiVox Micro HD -->
+    <usb-device vendor-id="7449" product-id="4356" />
+    <!-- 1f4d:a803  Sweex DVB-T USB -->
+    <usb-device vendor-id="8013" product-id="43011" />
+    <!-- 1f4d:b803  GTek T803 -->
+    <usb-device vendor-id="8013" product-id="47107" />
+    <!-- 1f4d:c803  Lifeview LV5TDeluxe -->
+    <usb-device vendor-id="8013" product-id="51203" />
+    <!-- 1f4d:d286  MyGica TD312 -->
+    <usb-device vendor-id="8013" product-id="53894" />
+    <!-- 1f4d:d803  PROlectrix DV107669 -->
+    <usb-device vendor-id="8013" product-id="55299" />
+</resources>

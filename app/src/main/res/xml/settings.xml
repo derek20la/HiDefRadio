@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 9e step 2: the list of settings. Android's "preference" library draws
+     the screen from this file and saves each choice by itself under its
+     app:key (read back in Settings.kt).
+     useSimpleSummaryProvider = show the current choice under the title.
+     The gain choices (Auto, 0.0 dB ... 49.6 dB) are filled in by
+     SettingsActivity, from Settings.GAIN_STEPS. -->
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory app:title="@string/settings_reception">
+
+        <ListPreference
+            app:defaultValue="auto"
+            app:key="gain"
+            app:title="@string/setting_gain"
+            app:useSimpleSummaryProvider="true" />
+
+        <!-- Just a line of help text under the gain setting. -->
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_gain_help" />
+
+        <!-- M11: digital (HD) audio or our own analog FM demodulator.
+             11d: "Auto" = analog at once, HD when it's good (the default). -->
+        <ListPreference
+            app:defaultValue="auto"
+            app:entries="@array/hd_mode_names"
+            app:entryValues="@array/hd_mode_keys"
+            app:key="hd_mode"
+            app:title="@string/setting_hd_mode"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_hd_mode_help" />
+
+        <!-- 11d: Auto only - the HD on this frequency is another station's
+             (the analog and the HD never line up). -->
+        <ListPreference
+            app:defaultValue="hd"
+            app:entries="@array/hd_mismatch_names"
+            app:entryValues="@array/hd_mismatch_keys"
+            app:key="hd_mismatch"
+            app:title="@string/setting_hd_mismatch"
+            app:useSimpleSummaryProvider="true" />
+
+        <!-- 11b step 2: analog FM stereo. Auto = the car-radio blend to mono
+             on noisy signals; Always mono cuts the hiss of weak DX stations. -->
+        <ListPreference
+            app:defaultValue="auto"
+            app:entries="@array/fm_stereo_names"
+            app:entryValues="@array/fm_stereo_keys"
+            app:key="fm_stereo"
+            app:title="@string/setting_fm_stereo"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_fm_stereo_help" />
+
+        <ListPreference
+            app:defaultValue="americas"
+            app:entries="@array/band_names"
+            app:entryValues="@array/band_keys"
+            app:key="fm_band"
+            app:title="@string/setting_band"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/settings_audio">
+
+        <ListPreference
+            app:defaultValue="mute"
+            app:entries="@array/focus_names"
+            app:entryValues="@array/focus_keys"
+            app:key="focus_mode"
+            app:title="@string/setting_focus"
+            app:useSimpleSummaryProvider="true" />
+
+        <!-- M10a: while paused the tuner keeps running (instant live ▶) and
+             uses battery, so it stops by itself after this long. -->
+        <ListPreference
+            app:defaultValue="5"
+            app:entries="@array/pause_stop_names"
+            app:entryValues="@array/pause_stop_keys"
+            app:key="pause_stop"
+            app:title="@string/setting_pause_stop"
+            app:useSimpleSummaryProvider="true" />
+
+        <!-- 9j: headset / Bluetooth / car buttons and volume-key shortcuts
+             (Derek: an accidental volume-key press changed the station). -->
+        <ListPreference
+            app:defaultValue="all"
+            app:entries="@array/media_buttons_names"
+            app:entryValues="@array/media_buttons_keys"
+            app:key="media_buttons"
+            app:title="@string/setting_media_buttons"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_media_buttons_help" />
+    </PreferenceCategory>
+
+    <!-- 9h: the look. "Follow the phone" = light or dark like the rest of the
+         phone; "True black" = dark with a pure black background (OLED). -->
+    <PreferenceCategory app:title="@string/settings_display">
+
+        <ListPreference
+            app:defaultValue="system"
+            app:entries="@array/theme_names"
+            app:entryValues="@array/theme_keys"
+            app:key="theme"
+            app:title="@string/setting_theme"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <!-- 13a step 2: what the app has saved by itself (station logos, the gain
+         that worked per station). SettingsActivity fills in the numbers and
+         shows the "what to clear" dialog. Presets and names are never touched. -->
+    <PreferenceCategory app:title="@string/settings_storage">
+
+        <Preference
+            app:key="clear_data"
+            app:title="@string/setting_clear" />
+    </PreferenceCategory>
+
+    <!-- 9f: About. The GPL asks apps to show their license and "no warranty"
+         note somewhere the user can find it. SettingsActivity fills in the
+         version and handles the taps. -->
+    <PreferenceCategory app:title="@string/settings_about">
+
+        <Preference
+            app:key="about_version"
+            app:selectable="false"
+            app:title="@string/app_name" />
+
+        <Preference
+            app:key="about_license"
+            app:title="@string/about_license"
+            app:summary="@string/about_license_summary" />
+
+        <Preference
+            app:key="about_source"
+            app:title="@string/about_source"
+            app:summary="@string/source_url_short" />
+
+        <Preference
+            app:key="about_licenses"
+            app:title="@string/about_licenses"
+            app:summary="@string/about_licenses_summary" />
+
+        <!-- 14c: the privacy policy. Google Play wants it reachable INSIDE the app, not only
+             on the store page. A tap shows the short version; a button opens the full page. -->
+        <Preference
+            app:key="about_privacy"
+            app:title="@string/about_privacy"
+            app:summary="@string/about_privacy_summary" />
+
+        <!-- 13b: the built-in station list (assets/stations/). SettingsActivity fills
+             in its date. -->
+        <Preference
+            app:key="about_stations"
+            app:selectable="false"
+            app:title="@string/about_stations" />
+    </PreferenceCategory>
+</PreferenceScreen>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 9i: ⏹ stop, cropped tight (no empty border) from Google's Material icon
+     (Apache License 2.0), for the in-app button column - so its padding alone
+     decides where the symbol sits. The notification keeps using ic_stop. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="12dp"
+    android:viewportWidth="12"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M0,0h12v12H0z" />
+</vector>

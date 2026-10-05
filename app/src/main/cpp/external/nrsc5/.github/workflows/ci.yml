@@ -1,0 +1,93 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  ubuntu-build:
+    name: Ubuntu CI
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libao-dev libfftw3-dev librtlsdr-dev python3-pyaudio
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+      - name: Compile
+        working-directory: build
+        run: make -j4
+      - name: Install
+        working-directory: build
+        run: |
+          sudo make install
+          sudo ldconfig
+      - name: Test
+        run: |
+          xz -d < support/sample.xz > sample
+          nrsc5 -r sample -o sample.wav 0 2> sample.log
+          cat sample.log
+          grep -q "You're Listening to Q" sample.log
+          cat sample | nrsc5 -r - -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+
+          support/cli.py -r sample -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+          cat sample | support/cli.py -r - -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+      - name: Windows cross-compile
+        run: |
+          sudo apt-get install -y mingw-w64
+          support/win-cross-compile 32 --cmake-args="-DUSE_SSE=ON" -j4
+          support/win-cross-compile 64 --cmake-args="-DUSE_SSE=ON" -j4
+  macos-build:
+    name: MacOS CI
+    strategy:
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install dependencies
+        run: |
+          brew install autoconf automake libtool libao fftw librtlsdr portaudio
+          python3 -m venv ${{ runner.temp }}/venv
+          source ${{ runner.temp }}/venv/bin/activate
+          pip3 install pyaudio
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+      - name: Compile
+        working-directory: build
+        run: make -j4
+      - name: Install
+        working-directory: build
+        run: sudo make install
+      - name: Test
+        run: |
+          xz -d < support/sample.xz > sample
+          nrsc5 -r sample -o sample.wav 0 2> sample.log
+          cat sample.log
+          grep -q "You're Listening to Q" sample.log
+          cat sample | nrsc5 -r - -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+
+          source ${{ runner.temp }}/venv/bin/activate
+          export DYLD_LIBRARY_PATH=/usr/local/lib
+          support/cli.py -r sample -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+          cat sample | support/cli.py -r - -o sample.wav 0 2> sample.log
+          grep -q "You're Listening to Q" sample.log
+      - name: Windows cross-compile
+        run: |
+          brew install mingw-w64
+          support/win-cross-compile 32 --cmake-args="-DUSE_SSE=ON" -j4
+          support/win-cross-compile 64 --cmake-args="-DUSE_SSE=ON" -j4

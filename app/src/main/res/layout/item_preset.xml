@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Milestone 9e step 1: ONE preset tile. MainActivity makes a copy of this
+     for every preset and fills it in:
+       ┌────────┐
+       │ [logo] │   preset_logo  (the saved logo from LogoCache), or, if we
+       │        │   have none yet, preset_initials (the call sign in big letters)
+       │ KRTH   │   preset_title (your name / program name / call sign)
+       │101.1 HD1│  preset_freq
+       └────────┘
+     The tile of the station you're listening to gets a thicker, colored
+     border (set in MainActivity). -->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="96dp"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="8dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardCornerRadius="10dp"
+    app:cardElevation="0dp"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp">
+
+            <ImageView
+                android:id="@+id/preset_logo"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:importantForAccessibility="no"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/preset_initials"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0.5"
+                android:gravity="center"
+                android:maxLines="1"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                tools:text="KRTH" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/preset_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:text="Channel Q" />
+
+        <TextView
+            android:id="@+id/preset_freq"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:alpha="0.7"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textSize="12sp"
+            tools:text="101.1 HD2" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>
