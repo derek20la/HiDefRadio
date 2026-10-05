@@ -6,7 +6,7 @@ An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with
 
 No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art. The app has no internet permission at all.
 
-> **Status: 1.0 beta.** A closed test on Google Play is starting (see [Help test it](#help-test-it)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.0 beta.** A closed test on Google Play is running, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
@@ -65,15 +65,25 @@ No internet permission, no ads, no account, no tracking. See the [privacy policy
 
 The dongle is powered by the phone, and on a phone with one USB port you can't charge while it is plugged in. In one test the radio used about 9 % of the battery per hour.
 
-## Help test it
+## Get the app
 
-Google asks new developers to run a closed test with at least 12 testers before an app can be published, so testers are very welcome, above all people who own a dongle.
+There are two ways. Please pick one and stay with it: the Play version is signed with Google's key and the APK with the developer's own key, so Android treats them as two different apps. To move from one to the other you have to uninstall first, and your favorites are not carried over.
+
+### Join the test on Google Play
+
+This is the way that helps most. Google asks new developers to run a closed test with at least 12 testers for 14 days before an app can be published, and only installs from Play count.
 
 1. Join the testers' group: <https://groups.google.com/g/hidef-radio-testers>
 2. Become a tester: <https://play.google.com/apps/testing/io.github.derek20la.hidefradio>
 3. Install HiDef Radio from the Play Store link on that page.
 
-If step 2 says the app isn't available, the test release is still waiting for Google's review. Try again a few days later.
+### Or download the APK
+
+Get the newest `HiDefRadio-...apk` from the [Releases](https://github.com/derek20la/HiDefRadio/releases) page and open it on the phone. Android asks you once to allow installs from your browser or file manager. The APK is built from this source with nothing added.
+
+To check a download: the signing certificate's SHA-256 is `0f7ba7ed4584a04293a2a76fd8b2cfd4ff83416f1c66f0647d30c329d5032117`.
+
+### Feedback
 
 Please tell me which phone and dongle you use and what works or doesn't: open an issue here, or write to hidefradioapp@yahoo.com.
 
