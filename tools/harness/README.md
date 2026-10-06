@@ -19,6 +19,14 @@ example of driving the engine outside Android.
 - `GAIN=auto` starts with the app's auto-gain search (default: a manual gain of 30 dB).
 - `DONGLE=V3` the fake dongle says it is an RTL-SDR Blog V3 (R820T tuner): on AM it reports
   direct sampling, and the app must then leave the tuner gain alone.
+- `IQSTEP=1` "virtual time": the recording is played as fast as the PC can, and everything
+  the app does on a timer (the alignment watcher, the audio player) is driven by the
+  recording's own time. The same run gives the same numbers every time, and a minute takes
+  seconds. (`IQPACE` is the real thing, threads racing as on the phone.) `PRINT=1` = one
+  status line per second.
+- `DRIFT=off` switches the clock correction (`drift.hpp`) off. The output is then bit for bit
+  what build 5 played - the proof that the correction changed nothing else.
+- `SIGDUMP=20` prints the app's whole status text once, 20 s in.
 - arguments: frequency in Hz, source (`0` Digital only, `1` Analog only, `2` Auto), seconds,
   then optional events `t:prog:N` (switch to program N at t seconds; 0 = HD1) and `t:src:N`.
 
@@ -29,3 +37,28 @@ stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI fun
 fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are downloaded into `build/`.
 
 `blendtest` (`build/blendtest`) tests `blend.hpp` alone with made-up audio.
+
+## The clock correction: mkdrift and drifttest
+
+A dongle with a plain crystal runs 30-100 ppm off. Then the analog audio (paced by the
+dongle) drifts against the HD audio (paced by the station) by frames per second, and before
+build 6 the blend never started. Two tools for that:
+
+    build/mkdrift krth.cu8 krth+57.cu8 57 101100000
+    IQFILE=krth+57.cu8 IQSTEP=1 PRINT=1 build/apptest 101100000 2 60
+
+`mkdrift` turns a recording made with a good dongle into what a dongle whose crystal runs
+57 ppm fast would have recorded: the station 5.8 kHz below the centre, and the samples taken
+57 ppm too fast. Run it through `apptest` with `DRIFT=off` to see the old behaviour (every
+alignment measurement accepted, none confirmed, analog for ever), and without to see the fix.
+
+    build/drifttest               # all scenarios, PASS / FAIL (about 5 minutes)
+    build/drifttest 57 120 v      # one run: 57 ppm, 120 s, every measurement printed
+    build/drifttest 57 120 none   # ... without the first guess from the tuning error
+    build/drifttest 57 120 off    # ... without the correction (must fail)
+
+`drifttest` needs no recording and no nrsc5: it feeds `drift.hpp`, `aligner.hpp` and
+`blend.hpp` one made-up program as "HD" and as "analog" with a crystal error of your choice,
+in made-up time (an hour takes half a minute). Its scenarios: 0 to +-150 ppm, a first guess
+that is wrong, none at all, a crystal that warms up, nrsc5 re-timing its output, and an hour
+of listening at 57 and 100 ppm.

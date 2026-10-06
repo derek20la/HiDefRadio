@@ -11,7 +11,11 @@
 //   Both streams are put on ONE time line, counted in audio frames (44,100 Hz)
 //   since the tune:
 //     - analog: frame n came out of the demodulator at IQ time n * 33.75 (the
-//       demodulator is time-true), so its index IS its position.
+//       demodulator is time-true), so its index IS its position. (Since drift.hpp:
+//       the analog audio passes through its clock correction first, which takes
+//       out or adds a frame now and then so that the analog keeps the STATION's
+//       time like the HD audio does; the IQ positions are corrected by the same
+//       amount before they get here. With a good dongle that amount is ~0.)
 //     - HD: nrsc5 hands out 2,048-frame pieces at points locked to the IQ stream
 //       (output.c: 2 pieces per acquire block of 138,240 IQ samples). We know the
 //       IQ position of the block we were pushing when a piece arrived, so the
@@ -119,6 +123,9 @@ private:
 struct Result {
     bool  accepted = false;
     long long offsetFrames = 0;   // analog index - HD index (44.1 kHz frames), > 0 = HD ahead
+    double offsetFine = 0;        // the same with its fraction of a frame (for drift.hpp's line fit)
+    long long at = 0;             // time line position of the MIDDLE of the analog stretch that was compared
+    int   epoch = 0;              // Status::epoch when this was measured
     float corr = 0;               // correlation coefficient at the peak (1 = identical)
     float gainDb = 0;             // analog loudness relative to HD (dB, > 0 = analog louder)
     float dMs = 0;                // offset in real time, ms (block uncertainty removed)
@@ -129,6 +136,8 @@ struct Status {
     int   state = 0;              // 0 waiting for audio, 1 measuring, 2 ok, 3 no match
     int   attempts = 0, accepted = 0;
     int   jumps = 0;              // times the alignment changed (after sync losses)
+    int   epoch = 0;              // counts every fresh start of the offsets (HD re-anchored, or a jump):
+                                  // offsets of different epochs can't be compared (drift.hpp)
     long long offsetFrames = 0;   // median of the accepted results (content offset)
     float dMs = 0;                // ... in real time, ms
     float corr = 0;               // latest accepted correlation
@@ -164,7 +173,8 @@ public:
 
     // Streaming thread: the analog audio as it goes into the analog ring (mono, 44.1 kHz,
     // same scale as the HD audio: 1.0 = full scale).
-    void pushAnalog(const float *mono, size_t n) {
+    // Returns the time line position of the NEXT analog frame (= frames received so far).
+    long long pushAnalog(const float *mono, size_t n) {
         std::lock_guard<std::mutex> lock(m_);
         for (size_t i = 0; i < n; i++) {
             float v = mono[i];
@@ -177,17 +187,19 @@ public:
             aNext_++;
         }
         status_.analogFrames = aNext_;
+        return aNext_;
     }
 
     // Streaming thread: one HD1 audio piece from nrsc5 (16-bit stereo interleaved, `count`
-    // values), received while we were pushing the IQ block that starts at IQ sample
-    // `iqBlockStart` (samples since the tune) and is `iqBlockLen` samples long.
+    // values), received while we were pushing the IQ block that starts at time line
+    // position `blockStart` and is `blockLen` frames long. (The caller converts: IQ
+    // samples since the tune / 33.75, minus the frames drift.hpp's clock correction has
+    // taken out of the analog audio so far - so the HD pieces are anchored on the same
+    // time line the analog frames are counted on.)
     // 11d: returns the piece's position on the time line (the frame index of its first
     // frame) - the blend keeps the HD audio in a ring indexed by the same numbers.
-    long long pushHd(const int16_t *stereo, size_t count, long long iqBlockStart, long long iqBlockLen) {
+    long long pushHd(const int16_t *stereo, size_t count, long long blockStart, long long blockLen) {
         std::lock_guard<std::mutex> lock(m_);
-        long long blockStart = (long long)std::llround(iqBlockStart / IQ_PER_FRAME);
-        long long blockLen   = (long long)std::llround(iqBlockLen / IQ_PER_FRAME);
         // Where should this piece sit on the time line? The true position of the run's
         // first piece is somewhere in its block [anchor, anchor + firstBlockLen), so the
         // expected position of this piece is within (blockStart - firstBlockLen, blockStart + blockLen).
@@ -212,7 +224,7 @@ public:
                 // Audio is back after an outage: the HD stream is anchored afresh, so the
                 // content offset changes - old results no longer apply. (The real-time
                 // figure stays the same, and the expected value is kept as the hint.)
-                results_.clear(); failures_ = 0;
+                results_.clear(); failures_ = 0; status_.epoch++;
                 if (status_.state == 2) status_.state = 1;
                 nextTryFrame_ = aNext_;
             }
@@ -259,6 +271,11 @@ public:
         decA_.init(histTaps(), DECIM);
         nextTryFrame_ = aNext_ + (long long)(TEMPLATE_SECONDS * FRAME_RATE);
         status_.analogFrames = aNext_;
+        // The analog frames are numbered afresh from here (the demodulator's own delay, ~20
+        // frames, is no longer in the numbers), so offsets measured before the gap can't be
+        // compared with the ones to come: start over, like after a re-anchored HD run.
+        results_.clear(); failures_ = 0; status_.epoch++;
+        if (status_.state == 2) status_.state = 1;
     }
 
     Status status() const {
@@ -306,14 +323,14 @@ public:
         std::vector<float> ct = decimate(tmpl, COARSE_DECIM), cr = decimate(region, COARSE_DECIM);
         float rCoarse = 0; long long kCoarse = 0;
         if (!bestLag(ct, cr, 0, (long long)cr.size() - (long long)ct.size(), rCoarse, kCoarse, true))
-            return finish(out, 0, 0.f, corr, false, usedHint, 0.f);
+            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f);
         // ---- 2. fine: 11,025 Hz, direct, +-6 coarse steps around the peak ----
         long long kMid = kCoarse * COARSE_DECIM, span = 6 * COARSE_DECIM;
         long long kMax = (long long)region.size() - (long long)tmpl.size();
         long long kLo = std::max(0LL, kMid - span), kHi = std::min(kMax, kMid + span);
         float rFine = 0; long long kFine = 0;
         if (!bestLag(tmpl, region, kLo, kHi, rFine, kFine, false))
-            return finish(out, 0, 0.f, corr, false, usedHint, 0.f);
+            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f);
         // Parabola through the three points around the peak -> fraction of a sample.
         double frac = 0;
         if (kFine > kLo && kFine < kHi) {
@@ -323,6 +340,7 @@ public:
             frac = std::max(-0.5, std::min(0.5, frac));
         }
         // template sample i (frame a0 + i*DECIM) matches HD sample kFine + i (frame s0 + (kFine + i)*DECIM)
+        double offsetFine = (double)(a0 - s0) - (kFine + frac) * DECIM;
         long long offsetFrames = a0 - s0 - (long long)std::llround((kFine + frac) * DECIM);
         // ---- 3. loudness over the aligned stretch (10 ms energies, full band) ----
         // (10 ms bins where the HD is exactly silent are dropouts nrsc5 filled with
@@ -337,7 +355,7 @@ public:
             eh += h;
         }
         float gainDb = (ea > 0 && eh > 0) ? (float)(10.0 * std::log10(ea / eh)) : 0.f;
-        return finish(out, offsetFrames, rFine, corr, rFine >= ACCEPT_CORR, usedHint, gainDb);
+        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, rFine >= ACCEPT_CORR, usedHint, gainDb);
     }
 
 private:
@@ -350,12 +368,14 @@ private:
         return (lo + hi) / 2 - hdAnchor_;
     }
 
-    bool finish(Result &out, long long offsetFrames, float r, long long corr,
+    bool finish(Result &out, long long offsetFrames, double offsetFine, long long a0, float r, long long corr,
                 bool accepted, bool usedHint, float gainDb) {
         std::lock_guard<std::mutex> lock(m_);
         status_.attempts++;
         out = Result();
         out.accepted = accepted; out.corr = r; out.offsetFrames = offsetFrames; out.gainDb = gainDb;
+        out.offsetFine = offsetFine;
+        out.at = a0 + (long long)(TEMPLATE_SECONDS * FRAME_RATE) / 2;
         out.dMs = (float)((offsetFrames - corr) * 1000.0 / FRAME_RATE);
         out.usedHint = usedHint;
         if (accepted) {
@@ -365,8 +385,9 @@ private:
             // one 2,048-frame piece later) -> the old results are wrong now, start over.
             if (!results_.empty() && std::llabs(offsetFrames - status_.offsetFrames) > JUMP_FRAMES) {
                 results_.clear();
-                status_.jumps++;
+                status_.jumps++; status_.epoch++;
             }
+            out.epoch = status_.epoch;
             results_.push_back(out);
             if (results_.size() > (size_t)KEEP_RESULTS) results_.erase(results_.begin());
             std::vector<long long> offs; std::vector<float> gains;

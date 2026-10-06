@@ -1009,6 +1009,7 @@ class MainActivity : AppCompatActivity() {
      * is - what the blend (11d) will need:
      *   "analog lags HD1 by 2485.1 ms (r 0.96), analog -0.2 dB
      *    5 measurements"
+     * Build 6 adds a last line: "dongle clock +57.4 ppm (measured) - corrected".
      * Before the first result: "waiting for HD audio" / "measuring…", or
      * "no match" when the two streams don't correlate (e.g. HD1 and analog
      * carrying different programs).
@@ -1042,7 +1043,18 @@ class MainActivity : AppCompatActivity() {
             }
             else -> ""
         }
-        return listOf("Alignment" to text + same)
+        // Build 6: the dongle's clock against the station's (drift.hpp) - how far the crystal
+        // is off, and where the figure comes from. Worth a line for testers: a dongle with a
+        // TCXO shows about 1 ppm, an old one 30-100.
+        // ("corrected" only in Auto: that is where the analog and the HD have to line up.)
+        val corrected = if (s.auto) " - corrected" else ""
+        val clock = when {
+            s.am || !s.demodOn -> ""
+            s.clockState == "measured" -> f("\ndongle clock %+.1f ppm (measured)%s", s.clockPpm, corrected)
+            s.clockState == "guess" -> f("\ndongle clock about %+.0f ppm (from the tuning offset)%s", s.clockPpm, corrected)
+            else -> ""
+        }
+        return listOf("Alignment" to text + same + clock)
     }
 
     /**

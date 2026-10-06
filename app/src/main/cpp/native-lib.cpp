@@ -16,6 +16,7 @@
 #include "fmdemod.hpp"     // M11: our analog FM demodulator
 #include "aligner.hpp"     // M11 (11c): measures the analog-vs-HD time offset and loudness
 #include "blend.hpp"       // M11 (11d): the analog <-> HD blend ("HD Radio: Auto")
+#include "drift.hpp"            // build 6: the dongle's clock vs the station's (clock correction)
 
 // nrsc5.h is a C header without C++ guards, so tell the C++ compiler
 // "these are C functions" (otherwise the linker can't find them).
@@ -367,6 +368,29 @@ static align::Aligner g_align;
 static std::atomic<long long> g_iqPos{0};
 static long long g_iqBlockStart = 0, g_iqBlockLen = 0;
 
+// ---- Build 6: the dongle's clock against the station's (drift.hpp) ----
+// The analog audio is paced by the dongle's crystal, the HD audio by the station's clock.
+// With a cheap crystal (50 ppm and more) the two drift apart by frames per second, the
+// aligner never sees two measurements agree, and the blend stays on analog for ever. So
+// the analog audio that goes to the aligner and the blender passes through a resampler
+// first (g_stretch, streaming thread only) which puts it on the station's clock; g_drift
+// decides by how much - from the tuning error at first, then from the aligner's own
+// measurements. The analog ring ("Analog only") gets the audio as it comes: there is
+// nothing to line up there.
+// g_slip = the frames the resampler has taken out so far. The time line the aligner and
+// the blender count on is "IQ time / 33.75 - g_slip": every IQ position is converted with
+// timelineFrame() before it goes to them.
+static drift::Stretch g_stretch;
+static drift::Tracker g_drift;
+static double g_driftRate = 0;                            // streaming thread: the correction for the next block
+static double g_idleSlip = 0;                             // streaming thread: frames "taken out" while the demodulator was off
+static std::atomic<double> g_slip{0.0};
+static std::atomic<int> g_tunedHz{0};                     // the tuned frequency (the tuning error is judged against it)
+static std::vector<float> g_fixedAudio;                   // streaming thread: the analog audio on the station's clock
+static long long timelineFrame(long long iqSamples) {
+    return (long long)std::llround((double)iqSamples / align::IQ_PER_FRAME - g_slip.load());
+}
+
 // ---- M11 (11d): the blend ----
 // In Auto, both audio streams go into the blender (analog from demodAnalog, HD1
 // from onNrsc5Event) and readAudioNative() takes the mixed output from it. It
@@ -659,16 +683,26 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
                 }
             }
         }
+        // Build 6: from the dongle's clock to the station's (drift.hpp). The aligner and the
+        // blender get this corrected audio; a frame more or less than came in now and then.
+        g_fixedAudio.clear();
+        g_stretch.process(out.data(), frames, g_driftRate, g_fixedAudio);
+        size_t fixedFrames = g_fixedAudio.size() / 2;
+        const double slip = g_stretch.slip() + g_idleSlip;
+        g_slip = slip;
         // 11b: the aligner keeps working on mono (L+R)/2 - the same signal as before stereo,
         // whatever the blend does to L-R (its cross-correlation with HD1 is unchanged).
         static std::vector<float> mono;              // streaming thread only
-        mono.resize(frames);
-        for (size_t i = 0; i < frames; i++) mono[i] = 0.5f * (out[2 * i] + out[2 * i + 1]);
-        g_align.pushAnalog(mono.data(), frames);         // 11c (its own lock, taken after ours - never inside)
-        g_blend.pushAnalog(out.data(), frames);          // 11d (likewise; wakes the reader in Auto). 11b: stereo
+        mono.resize(fixedFrames);
+        for (size_t i = 0; i < fixedFrames; i++) mono[i] = 0.5f * (g_fixedAudio[2 * i] + g_fixedAudio[2 * i + 1]);
+        long long timeline = g_align.pushAnalog(mono.data(), fixedFrames);   // 11c (its own lock, taken after ours - never inside)
+        g_blend.pushAnalog(g_fixedAudio.data(), fixedFrames);   // 11d (likewise; wakes the reader in Auto). 11b: stereo
         g_fm.audioOut.clear();
         g_fmCarrierDb = g_fm.carrierDbfs();
         g_fmOffsetHz = g_fm.freqOffsetHz();
+        // ... and how much to correct in the next block.
+        g_driftRate = g_drift.update(timeline, slip, g_fm.freqOffsetHz(), (double)g_tunedHz.load(),
+                                     (double)len / 2.0 / SAMPLE_RATE);
         g_fmQuietDb = g_fm.quietingDb();             // 9k
         g_fmPilot = g_fm.pilot() ? 1 : 0;            // 11b
         g_fmPilotLevel = g_fm.pilotLevel();
@@ -1023,7 +1057,8 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
                 // 11c: HD1's audio also goes to the aligner (analog is only ever
                 // compared with HD1 - the sub-channels have no analog twin).
                 if (evt->audio.program == 0) {
-                    long long index = g_align.pushHd(hdAudio, evt->audio.count, g_iqBlockStart, g_iqBlockLen);
+                    long long index = g_align.pushHd(hdAudio, evt->audio.count, timelineFrame(g_iqBlockStart),
+                                                     (long long)std::llround(g_iqBlockLen / align::IQ_PER_FRAME));
                     // 11d: ... and to the blender, on the same time line (Auto and Analog only;
                     // in Digital only the demodulator is off, so there is nothing to blend with).
                     if (demodWanted()) g_blend.pushHd(hdAudio, evt->audio.count, index);
@@ -1240,6 +1275,13 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
     // and the blend are off, saving 10-20 % of a core); Auto and Analog only run it.
     if (g_mode == NRSC5_MODE_FM && demodWanted()) {
         demodAnalog(buf, len);
+    } else if (g_mode == NRSC5_MODE_FM) {
+        // Build 6: Digital only - no analog audio, the clock correction's resampler stands
+        // still. The dongle's clock keeps drifting from the station's all the same, and the
+        // HD audio keeps being anchored on the time line: count the frames the resampler
+        // WOULD have taken out, so the time line still fits when the analog comes back.
+        g_idleSlip += g_drift.clock() * (double)(len / 2) / align::IQ_PER_FRAME;
+        g_slip = g_stretch.slip() + g_idleSlip;
     }
 }
 
@@ -1358,6 +1400,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_fmLoad.reset();                        // 9i
     g_align.reset();                         // 11c: alignment starts fresh too
     g_blend.reset();                         // 11d: and the blend (analog first, HD when it's good)
+    g_stretch.reset();                       // build 6: and the clock correction (the crystal's error is learnt anew)
+    g_drift.reset();
+    g_driftRate = 0; g_idleSlip = 0; g_slip = 0.0;
+    g_tunedHz = (int)freqHz;
     g_hdLoadPct = 0;
     g_hdLoad.reset();                        // 9i
     g_iqPos = 0;
@@ -1723,6 +1769,19 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
                  state, a.dMs, a.offsetFrames, a.corr, a.gainDb, a.accepted, a.attempts, a.jumps);
         out += buf;
     }
+    // Build 6: the clock correction (drift.hpp). clockState: off (nothing known, or the
+    // demodulator is off) / guess (from the tuning error) / measured (from the audio);
+    // clockPpm = the dongle's clock error as best known (> 0 = fast), clockUsePpm = the
+    // correction applied right now (the same plus a little steering), clockGuessPpm = what
+    // the tuning error alone says, clockErr = how far the analog is from its place (frames).
+    {
+        drift::Status d = g_drift.status();
+        bool on = g_mode == NRSC5_MODE_FM && demodWanted();
+        snprintf(buf, sizeof(buf), "clockState=%s\nclockPpm=%.1f\nclockUsePpm=%.1f\nclockGuessPpm=%.1f\nclockPoints=%d\nclockErr=%.1f\n",
+                 !on || d.state == 0 ? "off" : d.state == 2 ? "measured" : "guess",
+                 on ? d.clockPpm : 0.0, on ? d.ppm : 0.0, on && d.haveGuess ? d.guessPpm : 0.0, on ? d.points : 0, on ? d.errorFrames : 0.0);
+        out += buf;
+    }
     // M12: RDS (analog FM only; all empty / 0 while the demodulator is off). rdsSync = the
     // blocks line up; rdsBler = % of blocks with errors (last ~1.5 s); rdsPi = the station's
     // code in hex ("" until confirmed); rdsCall = call letters worked out from it (North
@@ -1957,9 +2016,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_setAudioSourceNative(JNIEnv*, jo
     if (before == SOURCE_HD && g_streaming) {
         // 11d: the demodulator was off (Digital only) and starts now, in the middle of
         // the stream. Its frame counter must stay in step with the IQ time line (the
-        // aligner and the blender rely on frame n = IQ time n * 33.75), so jump the
+        // aligner and the blender rely on frame n = IQ time n * 33.75, less what the
+        // clock correction has taken out), so jump the
         // analog counters forward to "now" BEFORE the streaming thread starts pushing.
-        long long frame = (long long)std::llround(g_iqPos.load() / align::IQ_PER_FRAME);
+        long long frame = timelineFrame(g_iqPos.load());
         g_align.skipAnalogTo(frame);
         g_blend.skipAnalogTo(frame);
     }
@@ -2043,12 +2103,27 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
     align::Result r;
     if (!g_align.measure(r)) return 0;
     if (r.accepted) {
-        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f), analog %+.1f dB%s",
-             r.dMs, r.offsetFrames, r.corr, r.gainDb, r.usedHint ? "" : " (full search)");
+        // Build 6: every accepted measurement also tells the clock correction how the analog
+        // moves against the HD (drift.hpp).
+        align::Status al = g_align.status();
+        g_drift.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, al.state == 2, al.offsetFrames);
+        drift::Status d = g_drift.status();
+        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f), analog %+.1f dB%s; dongle clock %+.1f ppm%s",
+             r.dMs, r.offsetFrames, r.corr, r.gainDb, r.usedHint ? "" : " (full search)",
+             d.clockPpm, d.state == 2 ? " (measured)" : d.state == 1 ? " (first guess)" : " (not corrected)");
         return 1;
     }
     LOGI("Alignment: no match (r %.3f%s)", r.corr, r.usedHint ? ", near the expected value" : ", full search");
     return 2;
+}
+
+// Tests only (the desktop harness; the app never calls it): clock correction on / off.
+// Off = the analog audio goes to the aligner and the blender exactly as it comes from the
+// demodulator, as in every build before 6.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_setClockCorrectionNative(JNIEnv*, jobject, jboolean on) {
+    g_drift.setEnabled(on == JNI_TRUE);
+    LOGI("Clock correction: %s", on == JNI_TRUE ? "on" : "OFF (test)");
 }
 
 // Kotlin (RadioEngine): external fun getAudioDroppedNative(): Long - values dropped because the ring was full

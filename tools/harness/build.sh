@@ -12,7 +12,7 @@ APP=${APP:-$HERE/../../app/src/main/cpp}
 mkdir -p "$HERE/build" && cd "$HERE/build"
 cp "$APP"/native-lib.cpp "$APP"/*.hpp .
 mkdir -p cfg && cp "$APP/nrsc5-config/config.h" cfg/
-cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
+cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
 [ -d nrsc5 ] || git clone --depth 1 --branch v3.2.0 https://github.com/theori-io/nrsc5.git
 [ -d rtl-sdr-blog ] || git clone --depth 1 https://github.com/rtlsdrblog/rtl-sdr-blog.git
 [ -d faad2 ] || { git clone --depth 1 --branch 2.11.2 https://github.com/knik0/faad2.git; (cd faad2 && patch -p1 < ../nrsc5/support/faad2-hdc-support.patch); }
@@ -27,5 +27,7 @@ gcc -O2 -w -I rtl-sdr-blog/include -c rtl_stub.c -o rtl_stub.o
 J=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}
 clang++ -std=c++17 -O2 -w -I stub -I nrsc5/include -I rtl-sdr-blog/include -I "$J/include" -I "$J/include/linux" -I "$J/include/darwin" apptest.cpp rtl_stub.o libnrsc5.a faad2/build/libfaad_hdc.a -lpthread -lm -o apptest
 clang++ -std=c++17 -O2 -w blendtest.cpp -o blendtest
-echo 'built build/apptest and build/blendtest. e.g.:'
+clang++ -std=c++17 -O2 -w drifttest.cpp -o drifttest
+clang++ -std=c++17 -O2 -w mkdrift.cpp -o mkdrift
+echo 'built build/apptest, build/blendtest, build/drifttest and build/mkdrift. e.g.:'
 echo '  IQFILE=klos.cu8 IQPACE=1 WAVOUT=out.wav build/apptest 95500000 2 34 4.5:prog:1 22:prog:0'

@@ -71,6 +71,11 @@ data class Signal(
     val alignCount: Int,      // accepted measurements on this station
     val alignTries: Int,      // measurements attempted
     val alignJumps: Int,      // times the alignment changed (after a sync loss nrsc5 can shift by one 93 ms piece)
+    // Build 6: the clock correction (drift.hpp). The analog audio is paced by the dongle's
+    // crystal, the HD audio by the station's clock; the app measures the difference and
+    // corrects the analog, so the two stay lined up with any dongle.
+    val clockState: String,   // "off" (nothing known / demodulator off), "guess" (from the tuning offset), "measured" (from the audio)
+    val clockPpm: Float,      // the dongle's clock error, parts per million (> 0 = fast). TCXO dongles: ~1; plain crystals: 30-100
     val station: String,      // e.g. "KRTH" ("" = not received yet)
     val slogan: String,
     // M12: RDS / RBDS - the data an ANALOG FM station sends (rds.hpp). All empty while the
@@ -206,6 +211,8 @@ data class Signal(
                 alignCount = long("alignCount", 0).toInt(),
                 alignTries = long("alignTries", 0).toInt(),
                 alignJumps = long("alignJumps", 0).toInt(),
+                clockState = str("clockState").ifEmpty { "off" },       // build 6
+                clockPpm = float("clockPpm", 0f),
                 station = str("station").trim(),
                 slogan = str("slogan").trim(),
                 rdsSync = bool("rdsSync"),                             // M12

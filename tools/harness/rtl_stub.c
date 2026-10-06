@@ -1,5 +1,7 @@
 // Harness only: a fake RTL-SDR dongle that plays a .cu8 recording ($IQFILE).
 // IQPACE=1 -> in real time (as the phone gets it), else as fast as possible.
+// apptest's IQSTEP mode sets rtl_stub_after_block: it is then called after every block with
+// the recording time played so far, and apptest does all its work there ("virtual time").
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +9,8 @@
 #include <unistd.h>
 #include <time.h>
 #include "rtl-sdr.h"
+void (*rtl_stub_after_block)(double seconds) = NULL;
+volatile int rtl_stub_eof = 0;              // the recording has been played to its end
 static FILE *g_file; static volatile int g_cancel; static uint32_t g_freq = 0, g_rate = 1488375; static int g_gain = 300;
 static FILE *file(void) { if (!g_file) { const char *p = getenv("IQFILE"); g_file = p ? fopen(p, "rb") : NULL; } return g_file; }
 int rtlsdr_open(rtlsdr_dev_t **dev, uint32_t index) { (void)index; *dev = (rtlsdr_dev_t *)1; return 0; }
@@ -51,8 +55,10 @@ int rtlsdr_read_async(rtlsdr_dev_t *dev, rtlsdr_read_async_cb_t cb, void *ctx, u
         if (n < buf_len) break;
         cb(buf, buf_len, ctx);
         sent += buf_len / 2.0 / g_rate;
+        if (rtl_stub_after_block) rtl_stub_after_block(sent);
         if (pace) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); double el = (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9; if (sent > el) usleep((useconds_t)((sent - el) * 1e6)); }
     }
+    rtl_stub_eof = 1;
     while (!g_cancel) usleep(20000);       // end of file: wait to be cancelled, like a dongle that went quiet
     free(buf); return 0;
 }

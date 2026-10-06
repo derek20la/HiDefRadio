@@ -28,6 +28,7 @@ No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see com
 
 - In the default **Auto** mode the analog sound starts within a moment of tuning. About ten seconds later the app has measured how far apart the analog and the HD audio are, and how much louder one is than the other, and it crossfades to HD without a skip or a jump in volume.
 - The HD audio is decoded about 2.5 seconds before it is due, so a dropout is known in advance. The blend fades back to analog before the gap and returns once the HD is clean again.
+- It works with cheap and old dongles too. Their crystals can be 50 parts per million off and more, which lets the analog audio creep away from the HD audio by milliseconds a minute. The app measures the dongle's clock against the station's and corrects for it.
 - HD2 and up have no analog twin and play live.
 - You can also choose **Digital only** or **Analog only**. Analog only switches the HD decoder off, which saves battery.
 
@@ -58,7 +59,7 @@ No internet permission, no ads, no account, no tracking. See the [privacy policy
 ## What you need
 
 - An Android phone with **USB host (OTG)** support, 64-bit ARM (arm64-v8a), Android 8.0 or newer.
-- An **RTL-SDR dongle**. Developed with the RTL-SDR Blog V4 (R828D tuner). The RTL-SDR Blog V3 and other R820T / R828D dongles use the same driver and should work on FM.
+- An **RTL-SDR dongle**. Developed with the RTL-SDR Blog V4 (R828D tuner). The RTL-SDR Blog V3 and other R820T / R828D dongles use the same driver and should work on FM; a tester's 2014 Nooelec R820T does. A dongle without a temperature-compensated crystal (TCXO) is fine: the app corrects its clock error (see [How the blend works](#how-the-blend-works)).
 - A USB-OTG adapter or cable, and an antenna.
 - For HD Radio: a station that broadcasts it. HD Radio is on the air in the United States, Canada and Mexico. Elsewhere the app is an analog FM radio with RDS.
 - For AM: a dongle that can tune below 24 MHz. That is the RTL-SDR Blog V4, which has an upconverter built in, or a dongle with a direct-sampling input such as the V3 (expected to work, not confirmed yet).
@@ -118,6 +119,9 @@ RTL-SDR dongle --USB--> libusb + librtlsdr (opened with Android's USB permission
       HD audio, station name,      analog FM in stereo, signal meter
       song info, logos, art        rds.hpp: RDS / RBDS
               |                          |
+              |                    drift.hpp
+              |                    puts the analog audio on the station's clock
+              |                          |
               |   aligner.hpp compares the two: time offset and loudness
               |                          |
               +------------+-------------+
@@ -130,25 +134,27 @@ RTL-SDR dongle --USB--> libusb + librtlsdr (opened with Android's USB permission
                                       RadioService (foreground) + MainActivity
 ```
 
-One stream of samples from the dongle feeds both decoders, so the analog and the HD audio share one clock and can't drift apart.
+One stream of samples from the dongle feeds both decoders. That does not put the two audio streams on one clock, though: the HD audio follows the station's clock (nrsc5 tracks the timing of the digital signal), while the analog audio is paced by the dongle's crystal. `drift.hpp` closes that gap.
 
 ### How the blend works
 
 1. **Analog first.** The FM demodulator has sound within a second of tuning. The HD decoder needs a few seconds to sync and to produce its first audio.
 2. **Measure the delay.** A station delays its analog audio so that a receiver's HD decoder has time to catch up (the "diversity delay"). nrsc5 decodes faster than that, so in this app the HD audio comes out about 2.5 seconds before the same sound arrives on the analog side. The figure is close to 2.485 s on most Los Angeles stations, but a few are tens of milliseconds off and one wanders from day to day, so `aligner.hpp` measures it on every tune by cross-correlating the two audio streams. A match is accepted only when the correlation is at least 0.5.
-3. **Match the loudness.** The aligner also measures how much louder one side is, and the blend brings the analog to the HD's level. The station's own "digital audio gain" field (which nrsc5 reports but does not apply) is applied to the HD audio first.
-4. **Crossfade.** Once a match is confirmed and the next two seconds of HD are clean, `blend.hpp` crossfades over half a second. The two streams are lined up to within one audio sample, so there is no echo and no skip.
-5. **Look ahead.** Because the HD audio is 2.5 seconds early, a dropout or sync loss is seen before it would be heard. The blend fades to analog ahead of the gap and comes back when the HD is clean again. If the HD keeps dropping, it waits a little longer each time before going back.
-6. **When the audio never lines up.** Then the HD signal on that frequency may belong to another station than the analog one, which happens with distant stations. A setting decides whether to play that HD anyway or stay on the analog. One exception: if the call letters from RDS and from the HD signal are the same, it is the same station with its two sides processed very differently, and the HD is played.
+3. **Keep the two clocks together.** The HD audio comes at exactly 44,100 frames per second of the station's time. The analog audio comes at 44,100 frames per second of the dongle's time, and a dongle's crystal can be far off: 1 part per million with a TCXO (RTL-SDR Blog V3 and V4), 30 to 100 ppm without one. At 57 ppm the analog gains 2.5 frames on the HD every second, so two measurements five seconds apart never agree and the blend would never start. `drift.hpp` resamples the analog audio by the missing few millionths. It gets a first figure from the tuning error (one crystal sets both the tuner frequency and the sample clock, so a station that shows up 5.4 kHz low at 94.5 MHz means a clock 57 ppm fast) and then the exact one from a straight-line fit through the aligner's own measurements. The HD audio is never touched.
+4. **Match the loudness.** The aligner also measures how much louder one side is, and the blend brings the analog to the HD's level. The station's own "digital audio gain" field (which nrsc5 reports but does not apply) is applied to the HD audio first.
+5. **Crossfade.** Once a match is confirmed and the next two seconds of HD are clean, `blend.hpp` crossfades over half a second. The two streams are lined up to within one audio sample, so there is no echo and no skip.
+6. **Look ahead.** Because the HD audio is 2.5 seconds early, a dropout or sync loss is seen before it would be heard. The blend fades to analog ahead of the gap and comes back when the HD is clean again. If the HD keeps dropping, it waits a little longer each time before going back.
+7. **When the audio never lines up.** Then the HD signal on that frequency may belong to another station than the analog one, which happens with distant stations. A setting decides whether to play that HD anyway or stay on the analog. One exception: if the call letters from RDS and from the HD signal are the same, it is the same station with its two sides processed very differently, and the HD is played.
 
 FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono below 24 dB and a gradual change in between, modelled on what car-radio tuner chips do. One finding from this project: on the RTL-SDR the noise after the FM discriminator measured almost flat from 16 to 100 kHz, where textbooks show it rising with frequency. Stereo therefore costs only about 5 dB of extra hiss, where the classic figure is around 20 dB.
 
 ### Where things are
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the dongle, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
-- Next to it are four self-contained C++17 headers with no Android code in them:
+- Next to it are five self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter).
   - `rds.hpp`: the RDS / RBDS decoder. It needs nothing but the FM multiplex signal.
+  - `drift.hpp`: the clock correction. A small resampler, and the tracker that works out the dongle's clock error.
   - `aligner.hpp`: measures the analog-vs-HD time offset and loudness difference.
   - `blend.hpp`: the delay line, the look-ahead and the crossfade.
 
@@ -160,7 +166,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
   - `AudioPlayer`, `GainKeeper` (the gain watchdog), `Stations` (the station list), `Presets` (the favorites), `LogoCache`, `Settings` and the rest.
 - `app/src/main/assets/stations/` holds the station list. `tools/fcc/make_stations.py` builds it from the FCC's data.
 - `app/src/main/cpp/CMakeLists.txt` builds libusb, librtlsdr, FFTW, FAAD2 and nrsc5 as static libraries.
-- `tools/harness` runs the whole native engine on a PC against an IQ recording (`.cu8`), with no phone and no dongle. Every DSP step was tested that way.
+- `tools/harness` runs the whole native engine on a PC against an IQ recording (`.cu8`), with no phone and no dongle. Every DSP step was tested that way. It also has `mkdrift`, which turns a recording into what a dongle with a cheap crystal would have recorded, and `drifttest`, which runs the clock correction through hours of made-up radio in seconds.
 - `tools/lrcheck` is the test that proves the FM stereo decoder has left and right the right way round.
 - `store/` holds the pictures for the Google Play listing.
 
