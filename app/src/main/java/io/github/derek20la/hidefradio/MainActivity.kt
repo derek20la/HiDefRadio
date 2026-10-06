@@ -21,7 +21,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.text.InputFilter
 import android.text.InputType
+import android.text.TextPaint
 import android.util.Log
+import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -34,6 +36,7 @@ import android.widget.LinearLayout
 import android.widget.TableRow
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -139,6 +142,7 @@ class MainActivity : AppCompatActivity() {
     // 9h: the theme this screen was drawn with (Settings -> Theme). If it
     // changed while we were away, onStart() redraws the screen.
     private var themeShown = ""
+    private var welcomeDialog: AlertDialog? = null       // build 7: the welcome card while it is open
     // 9h: the status line's normal text colors (it turns amber for "plug in").
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
@@ -221,6 +225,11 @@ class MainActivity : AppCompatActivity() {
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         supportedIds = loadSupportedIds()
         setUpTuning()
+        // Build 7: when the display's width is known (and whenever it changes), make the
+        // digits fit - see fitVfd(). Posted: a text size must not be changed inside a layout pass.
+        binding.vfdPanel.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left != oldRight - oldLeft) binding.vfdPanel.post { fitVfd() }
+        }
         setUpToggles()
         setUpStickyBar()                                             // 9g
         binding.presetStar.setOnClickListener { togglePreset() }   // 9e
@@ -244,18 +253,36 @@ class MainActivity : AppCompatActivity() {
             this, permissionReceiver, IntentFilter(ACTION_USB_PERMISSION),
             ContextCompat.RECEIVER_NOT_EXPORTED)
 
-        // Android 13+: ask once for permission to show notifications (the
-        // "now playing" notification). The radio works even if you say no.
+        // Build 7: the very first start shows the welcome card (Welcome.kt) - and nothing
+        // else until it has been read. Android's question about notifications and the
+        // search for the dongle (which brings Android's USB question) wait for "Got it",
+        // so there is one thing on the screen at a time.
+        if (Welcome.wanted(this)) {
+            welcomeDialog = Welcome.show(this) {
+                welcomeDialog = null
+                askForNotifications()
+                findAndStartRadio()
+            }
+            return
+        }
+        askForNotifications()
+
+        // 9h: only on a fresh start - not when the screen is redrawn (new theme,
+        // phone turned), or a stopped radio would start again by itself.
+        if (savedInstanceState == null) findAndStartRadio()
+    }
+
+    /**
+     * Android 13+: ask once for permission to show notifications (the "now playing"
+     * notification). The radio works even if you say no.
+     */
+    private fun askForNotifications() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(
                 this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
-
-        // 9h: only on a fresh start - not when the screen is redrawn (new theme,
-        // phone turned), or a stopped radio would start again by itself.
-        if (savedInstanceState == null) findAndStartRadio()
     }
 
     // Called instead of onCreate when the app is already open and Android
@@ -286,6 +313,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Build 7: the welcome card must not outlive its screen (phone turned while it is
+        // open). Closed like this it does not count as read - the new screen shows it again.
+        welcomeDialog?.let { it.setOnDismissListener(null); it.dismiss() }
+        welcomeDialog = null
         uiHandler.removeCallbacks(delayedTune)
         unregisterReceiver(permissionReceiver)
         // NOTE: we do NOT stop the radio here - RadioService keeps playing.
@@ -459,6 +490,7 @@ class MainActivity : AppCompatActivity() {
             binding.vfdFreq.text = text.padStart(4, '!')
             binding.vfdGhost.text = "8888"
             binding.vfdUnit.setText(R.string.khz)
+            fitVfd()
             return
         }
         binding.vfdFreq.text = text.padStart(5, '!')
@@ -466,6 +498,40 @@ class MainActivity : AppCompatActivity() {
         // unlit segments behind it ("88.88" instead of "888.8").
         binding.vfdGhost.text = if (text.length - text.indexOf('.') == 3) "88.88" else "888.8"
         binding.vfdUnit.setText(R.string.mhz)
+        fitVfd()
+    }
+
+    /**
+     * Build 7: makes the frequency digits fit the display.
+     *
+     * The digits are 44 sp tall when there is room - and there is on a phone 411 dp wide
+     * at the normal font size. A narrower phone (a Galaxy S23 is 360 dp), or a large font
+     * size in the phone's settings, makes the digits plus the small "HD / MHz" column wider
+     * than the display; the column was then squeezed and "MHz" broke into "MH" and "z" on
+     * two lines (the first tester's screenshot). So: measure what the digits would need at
+     * full size, and if that is more than there is, make both copies of the digits (the
+     * lit ones and the dim "888.8" behind them) smaller by just that much. Never below half.
+     */
+    private fun fitVfd() {
+        val panel = binding.vfdPanel
+        val room = panel.width - panel.paddingLeft - panel.paddingRight
+        if (room <= 0) return                                   // not laid out yet - the layout listener calls again
+        val metrics = resources.displayMetrics
+        // the small column: its wider label (one line each), its margin, 2 dp to spare
+        val column = binding.vfdUnit.parent as View
+        val columnWidth = maxOf(binding.vfdUnit.paint.measureText(binding.vfdUnit.text.toString()),
+                                binding.vfdHd.paint.measureText(binding.vfdHd.text.toString())) +
+                          (column.layoutParams as ViewGroup.MarginLayoutParams).marginStart + 2 * metrics.density
+        val ghost = binding.vfdGhost
+        val padding = ghost.paddingLeft + ghost.paddingRight
+        val fullSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, VFD_DIGITS_SP, metrics)
+        val wanted = TextPaint(ghost.paint).apply { textSize = fullSize }.measureText(ghost.text.toString())
+        val fits = room - columnWidth - padding
+        val size = if (wanted <= fits) fullSize else maxOf(fullSize / 2, fullSize * fits / wanted)
+        if (abs(ghost.textSize - size) >= 0.5f) {
+            ghost.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
+            binding.vfdFreq.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
+        }
     }
 
     // ------------------------------------------------------------------ now playing (9d)
@@ -1757,6 +1823,7 @@ class MainActivity : AppCompatActivity() {
 
         // 9d: remembers whether the signal details / debug text are open.
         private const val UI_PREFS = "ui"
+        private const val VFD_DIGITS_SP = 44f           // the frequency digits at full size (as in activity_main.xml)
         private const val KEY_DETAILS_OPEN = "details_open"
         private const val KEY_DEBUG_OPEN = "debug_open"
     }

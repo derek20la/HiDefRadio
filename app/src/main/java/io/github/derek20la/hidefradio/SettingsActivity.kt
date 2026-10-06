@@ -30,7 +30,7 @@ import java.util.Locale
  * listens for changes, so a new setting works right away, even while playing.
  *
  * 9f: an About section at the bottom (version, license, source code link,
- * open-source licenses; 14c: the privacy policy).
+ * open-source licenses; 14c: the privacy policy; build 7: "Getting started").
  * 13a step 2: a Storage section above it: "Clear saved data" (station logos,
  * remembered gains).
  */
@@ -112,6 +112,12 @@ class SettingsActivity : AppCompatActivity() {
 
             // "HiDef Radio / Version 1.0-beta1 (build 1) / Installed Oct 2, 8:15 PM"
             findPreference<Preference>(KEY_VERSION)?.summary = versionSummary()
+
+            // Build 7: "Getting started" → the welcome card of the first start, again.
+            findPreference<Preference>(KEY_WELCOME)?.setOnPreferenceClickListener {
+                Welcome.show(requireContext())
+                true
+            }
 
             // "Free software (GNU GPL v3 or later)" → show the GPL.
             findPreference<Preference>(KEY_LICENSE)?.setOnPreferenceClickListener {
@@ -282,6 +288,7 @@ class SettingsActivity : AppCompatActivity() {
         // Keys of the Storage and About entries in res/xml/settings.xml
         const val KEY_CLEAR = "clear_data"              // 13a step 2
         const val KEY_VERSION = "about_version"
+        const val KEY_WELCOME = "about_welcome"         // build 7
         const val KEY_LICENSE = "about_license"
         const val KEY_SOURCE = "about_source"
         const val KEY_LICENSES = "about_licenses"

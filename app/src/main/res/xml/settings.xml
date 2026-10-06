@@ -135,6 +135,12 @@
             app:selectable="false"
             app:title="@string/app_name" />
 
+        <!-- Build 7: the welcome card of the first start, to read again any time. -->
+        <Preference
+            app:key="about_welcome"
+            app:title="@string/about_welcome"
+            app:summary="@string/about_welcome_summary" />
+
         <Preference
             app:key="about_license"
             app:title="@string/about_license"

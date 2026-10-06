@@ -114,7 +114,9 @@
                         android:textSize="44sp" />
                 </FrameLayout>
 
-                <!-- Small "HD" (lit while synced) above "MHz" -->
+                <!-- Small "HD" (lit while synced) above "MHz". Build 7: one line each, always -
+                     on a narrow phone "MHz" broke into "MH" / "z"; MainActivity.fitVfd()
+                     now shrinks the digits when the room is short. -->
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -125,6 +127,7 @@
                         android:id="@+id/vfd_hd"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:maxLines="1"
                         android:shadowColor="@color/vfd_glow"
                         android:shadowRadius="8"
                         android:text="@string/vfd_hd"
@@ -136,6 +139,7 @@
                         android:id="@+id/vfd_unit"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:maxLines="1"
                         android:shadowColor="@color/vfd_glow"
                         android:shadowRadius="8"
                         android:text="@string/mhz"
