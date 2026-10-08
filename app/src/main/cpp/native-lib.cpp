@@ -1774,12 +1774,19 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // clockPpm = the dongle's clock error as best known (> 0 = fast), clockUsePpm = the
     // correction applied right now (the same plus a little steering), clockGuessPpm = what
     // the tuning error alone says, clockErr = how far the analog is from its place (frames).
+    // Build 8: clockUnused = which of the two witnesses was NOT believed, if any - "audio"
+    // (its figure is too far from the tuning error's and it has no strong case) or "tuning"
+    // (the audio proved the tuning error wrong) - and clockUnusedPpm = what that one says;
+    // clockScatter = how much more this station's measurements scatter than usual (1 = as usual).
     {
         drift::Status d = g_drift.status();
         bool on = g_mode == NRSC5_MODE_FM && demodWanted();
-        snprintf(buf, sizeof(buf), "clockState=%s\nclockPpm=%.1f\nclockUsePpm=%.1f\nclockGuessPpm=%.1f\nclockPoints=%d\nclockErr=%.1f\n",
+        snprintf(buf, sizeof(buf), "clockState=%s\nclockPpm=%.1f\nclockUsePpm=%.1f\nclockGuessPpm=%.1f\nclockPoints=%d\nclockErr=%.1f\n"
+                 "clockUnused=%s\nclockUnusedPpm=%.1f\nclockScatter=%.1f\n",
                  !on || d.state == 0 ? "off" : d.state == 2 ? "measured" : "guess",
-                 on ? d.clockPpm : 0.0, on ? d.ppm : 0.0, on && d.haveGuess ? d.guessPpm : 0.0, on ? d.points : 0, on ? d.errorFrames : 0.0);
+                 on ? d.clockPpm : 0.0, on ? d.ppm : 0.0, on && d.haveGuess ? d.guessPpm : 0.0, on ? d.points : 0, on ? d.errorFrames : 0.0,
+                 !on || d.state == 0 || d.unused == 0 ? "" : d.unused == 1 ? "audio" : "tuning",
+                 on && d.state != 0 && d.unused != 0 ? d.unusedPpm : 0.0, on ? d.scatter : 1.0);
         out += buf;
     }
     // M12: RDS (analog FM only; all empty / 0 while the demodulator is off). rdsSync = the
@@ -2108,9 +2115,12 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
         align::Status al = g_align.status();
         g_drift.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, al.state == 2, al.offsetFrames);
         drift::Status d = g_drift.status();
-        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f), analog %+.1f dB%s; dongle clock %+.1f ppm%s",
+        char note[80] = "";                         // build 8: a witness that was not believed (drift.hpp)
+        if (d.state != 0 && d.unused != 0)
+            snprintf(note, sizeof(note), "; the %s says %+.1f ppm - not used", d.unused == 1 ? "audio" : "tuning offset", d.unusedPpm);
+        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f), analog %+.1f dB%s; dongle clock %+.1f ppm%s%s",
              r.dMs, r.offsetFrames, r.corr, r.gainDb, r.usedHint ? "" : " (full search)",
-             d.clockPpm, d.state == 2 ? " (measured)" : d.state == 1 ? " (first guess)" : " (not corrected)");
+             d.clockPpm, d.state == 2 ? " (measured)" : d.state == 1 ? " (from the tuning offset)" : " (not corrected)", note);
         return 1;
     }
     LOGI("Alignment: no match (r %.3f%s)", r.corr, r.usedHint ? ", near the expected value" : ", full search");

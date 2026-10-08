@@ -14,7 +14,11 @@
 //                                   one run. "none" = no first guess from the tuning error,
 //                                   "off" = no correction at all (the app before build 6),
 //                                   "lost=18" = the dongle loses 18 frames' worth of samples at 70 s,
-//                                   "v" = print every measurement.
+//                                   "wander=12 noise=0.05" = a station whose analog and HD audio are
+//                                   processed differently (the timing wanders by 12 frames rms, r ~0.65),
+//                                   "seed=3" = other noise, "v" = print every measurement.
+//   drifttest tracker [v]           only the tests of the Tracker alone (build 8): measurements written
+//                                   down by hand, among them the fault a tester's video showed.
 //
 // build:  clang++ -std=c++17 -O2 -I ../../app/src/main/cpp drifttest.cpp -o drifttest
 #include "aligner.hpp"
@@ -60,6 +64,7 @@ struct Setup {
     double hdJumpAt = -1;                             // at this time nrsc5 "re-times" its output by one 2,048-frame piece
     double lostAt = -1; double lostFrames = 0;        // at this time the dongle loses this many frames' worth of samples (a USB hiccup)
     double wanderFrames = 1.0;                        // rms wander of the analog's timing (frames)
+    double noise = 0.012;                             // noise on the analog audio (the program itself is ~0.04 rms)
     bool verbose = false;
     unsigned seed = 5;                                // another seed = other noise, other wander
 };
@@ -70,6 +75,8 @@ struct Outcome {
     int toHd = 0, toAnalog = 0;   // fades
     double worst = 0;             // largest move of the TRUE offset after the lock (frames)
     double ppmErr = 0;            // the tracker's clock error figure minus the truth, at the end
+    double clockWorst = 0;        // ... and the furthest it ever was from the truth (from 6 s after the tune), ppm
+    double rAvg = 0;              // average correlation of the accepted measurements
     double hdShare = 0;           // share of the time the blend played HD after it first got there
     int epochs = 0, measurements = 0, accepted = 0;
 };
@@ -112,7 +119,7 @@ static Outcome run(const Setup &su) {
         raw.clear();
         for (long long i = n; i < n1; i++) {
             double tt = (double)i / FS;
-            float v = prog.at(station + (double)(i - n) / (1 + e) - DELAY + wander(tt)) + 0.012f * noise(rng);
+            float v = prog.at(station + (double)(i - n) / (1 + e) - DELAY + wander(tt)) + (float)su.noise * noise(rng);
             raw.push_back(v); raw.push_back(v);
         }
         station = stationEnd; n = n1; iq += BLK;
@@ -123,6 +130,7 @@ static Outcome run(const Setup &su) {
         bl.pushAnalog(fixed.data(), mono.size());
         double offsetHz = su.haveGuess ? -(su.ppm(t) + su.guessErrPpm) * 1e-6 * STATION_HZ : 3e6;   // 3 MHz: "not usable"
         rate = tracker.update(cNow, stretch.slip(), offsetHz, STATION_HZ, blockS);
+        if (t > 6) o.clockWorst = std::max(o.clockWorst, std::fabs(tracker.status().clockPpm - su.ppm(t)));
         // -- the audio thread --
         align::Status as = al.status();
         while (bl.read(out.data(), 4096, 0, as) > 0) {}
@@ -133,7 +141,7 @@ static Outcome run(const Setup &su) {
             align::Result r;
             if (al.measure(r)) {
                 o.measurements++;
-                if (r.accepted) { o.accepted++; as = al.status(); tracker.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, as.state == 2, as.offsetFrames); }
+                if (r.accepted) { o.accepted++; o.rAvg += r.corr; as = al.status(); tracker.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, as.state == 2, as.offsetFrames); }
                 if (su.verbose) {
                     drift::Status d = tracker.status(); as = al.status();
                     printf("  t %6.1f  offset %lld (%.2f) r %.2f %s  %s median %lld  clock %+6.1f ppm (%s, %d pts, spread %.1f, restarts %d, skipped %d)  blend %d fades %d/%d\n", t, r.offsetFrames, r.offsetFine, r.corr,
@@ -168,6 +176,7 @@ static Outcome run(const Setup &su) {
     o.hdShare = sinceHd > 0 ? hdTime / sinceHd : 0;
     o.toHd = bs.toHd; o.toAnalog = bs.toAnalog;
     o.ppmErr = d.clockPpm - su.ppm(su.seconds);
+    if (o.accepted > 0) o.rAvg /= o.accepted;
     o.epochs = al.status().epoch;
     return o;
 }
@@ -222,10 +231,165 @@ static void stretchTests() {
     }
 }
 
+// ---- the Tracker alone, fed with measurements we make up --------------------------------------
+// No audio at all here: the tracker gets the tuning offset block by block, as in the app, and
+// alignment measurements we write down by hand - the true offset of a dongle `truePpm` fast,
+// plus the error we want each measurement to have. That is how a fault seen once in the field
+// becomes a test that runs in a millisecond.
+struct Feed { double t; double errFrames; float r; };     // when (s after the tune), how wrong (frames), how well matched
+struct Script {
+    double truePpm = 58, tuningErrPpm = 0;                // the crystal, and how far the tuning offset is off it
+    double warmPpm = 0;                                   // the crystal moves by this much over the run (it warms up)
+    bool haveGuess = true;                                // false: the tuning offset is unusable (reads 3 MHz)
+    std::vector<Feed> feeds;
+    double seconds = 30;
+    bool verbose = false;
+};
+struct ScriptOutcome {
+    double worst = 0, last = 0, lastErr = 0;              // the clock figure: furthest from the truth (ppm), at the end, and its error then
+    int state = 0;                                        // drift::Status::state at the end
+    int unused = 0; double unusedPpm = 0;                 // ... and which witness was not believed then (0 = none)
+    bool audioRefused = false;                            // at some point the audio's figure was refused (unused == 1)
+    double measuredAt = -1;                               // when the figure was first called "measured"
+};
+static ScriptOutcome play(const Script &sc) {
+    drift::Tracker tr;
+    const double F = (double)BLK / 33.75, blockS = (double)BLK / 1488375.0;
+    struct Then { long long frame; double slip, raw; };
+    std::vector<Then> hist;                               // every block: the measurements refer to the past
+    double slip = 0, rate = 0, raw = 100000.0; long long c = 0; size_t next = 0;
+    std::vector<long long> results;
+    ScriptOutcome o;
+    for (double t = 0; t < sc.seconds; t += blockS) {
+        const double ppm = sc.truePpm + sc.warmPpm * t / sc.seconds;
+        c += (long long)F; slip += rate * F;
+        raw += ppm * 1e-6 * F;                            // without the correction the offset grows by that many frames per frame
+        hist.push_back({ c, slip, raw });
+        rate = tr.update(c, slip, sc.haveGuess ? -(ppm + sc.tuningErrPpm) * 1e-6 * STATION_HZ : 3e6, STATION_HZ, blockS);
+        while (next < sc.feeds.size() && t >= sc.feeds[next].t) {
+            const Feed &f = sc.feeds[next++];
+            long long at = c - (long long)(1.5 * FS);     // the aligner compares the last 3 s: the middle lies 1.5 s back
+            Then then = hist.back();
+            for (size_t i = hist.size(); i-- > 0;) if (hist[i].frame <= at) { then = hist[i]; break; }
+            // ... and the Stretch has taken `slip` of it out again
+            double offset = then.raw - then.slip + f.errFrames;
+            results.push_back((long long)std::llround(offset)); if (results.size() > 9) results.erase(results.begin());
+            size_t n = results.size();
+            bool ok = n >= 2 && std::llabs(results[n - 1] - results[n - 2]) <= 3;
+            std::vector<long long> sorted = results; std::sort(sorted.begin(), sorted.end());
+            tr.addMeasurement(at, offset, f.r, 0, ok, sorted[n / 2]);
+            drift::Status d = tr.status();
+            if (d.unused == 1) o.audioRefused = true;
+            if (d.state == 2 && o.measuredAt < 0) o.measuredAt = f.t;
+            if (sc.verbose) {
+                printf("    t %5.1f  measurement %+5.1f fr off, r %.2f -> clock %+7.1f ppm (%s, %d points, scatter x%.1f)", f.t, f.errFrames, f.r, d.clockPpm,
+                       d.state == 2 ? "measured" : d.state == 1 ? "tuning offset" : "nothing", d.points, d.scatter);
+                if (d.unused) printf("   [%s says %+.1f ppm - not used]", d.unused == 1 ? "the audio" : "the tuning offset", d.unusedPpm);
+                printf("\n");
+            }
+        }
+        drift::Status d = tr.status();
+        if (t > 4) o.worst = std::max(o.worst, std::fabs(d.clockPpm - ppm));
+        o.last = d.clockPpm; o.lastErr = d.clockPpm - ppm; o.state = d.state;
+        o.unused = d.unused; o.unusedPpm = d.unusedPpm;
+    }
+    return o;
+}
+// measurements at the times the app makes them: its watcher asks every 2 s, the aligner
+// answers when 3 s of both streams are there, again at the next tick, then every third tick
+// (it wants 5 s between two measurements) - each with the error given
+static std::vector<Feed> feedsAt(double first, std::initializer_list<double> errs, float r) {
+    std::vector<Feed> f; double t = first; int i = 0;
+    for (double e : errs) { f.push_back({ t, e, r }); t += i++ == 0 ? 2.0 : 6.0; }
+    return f;
+}
+static void trackerTests(bool verbose) {
+    char d[240];
+    {   // The fault a tester's screen video showed (2026-10-08, a 2014 Nooelec dongle +58 ppm fast,
+        // WWHT 107.9 Syracuse, r 0.71): the first two measurements agreed, the blend went to HD,
+        // the third came out ~14 frames off - and build 7 took that for the crystal: "+103.2 ppm
+        // (measured)". One noisy measurement must not outvote the tuning offset.
+        Script sc; sc.truePpm = 58.2; sc.feeds = feedsAt(8.0, { 0.0, 1.0, 14.0 }, 0.71f); sc.seconds = 20; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "clock figure %+.1f ppm after the third measurement, never more than %.1f ppm from the true +58.2", o.last, o.worst);
+        check("the tester's fault: 3rd measurement 14 frames off", o.worst < 9.0, d);
+    }
+    {   // The same thing found on a recording of Derek's own (KKLQ 100.3, 09-28, his V4 at +1 ppm):
+        // analog and HD processed differently, r 0.52-0.54, offsets 109627 / 109651 / 109613 ->
+        // build 7: "-44.2 ppm (measured)" on a dongle that is 1 ppm off.
+        Script sc; sc.truePpm = 1.0;
+        sc.feeds = { { 8.0, 0, 0.54f }, { 10.0, 24, 0.52f }, { 20.0, -14, 0.53f } }; sc.seconds = 24; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "clock figure %+.1f ppm at the end, never more than %.1f ppm from the true +1.0", o.last, o.worst);
+        check("KKLQ's numbers: offsets 24 and 38 frames apart", o.worst < 9.0, d);
+    }
+    {   // A station where every measurement is off by 10 frames or so, for five minutes
+        Script sc; sc.truePpm = -100; sc.seconds = 300; sc.verbose = verbose;
+        std::mt19937 r(21); std::normal_distribution<double> g(0, 10);
+        double t = 8; for (int i = 0; t < 295; i++) { sc.feeds.push_back({ t, g(r), 0.65f }); t += i == 0 ? 2.0 : 6.0; }
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "clock figure %+.1f ppm at the end, never more than %.1f ppm from the true -100.0", o.last, o.worst);
+        check("five minutes of measurements 10 frames off", o.worst < 9.0, d);
+    }
+    // measurements as a normal station gives them: within a frame or so, r 0.95
+    auto normal = [](double seconds, unsigned seed) {
+        std::vector<Feed> f; std::mt19937 r(seed); std::normal_distribution<double> g(0, 1.2);
+        double t = 8; for (int i = 0; t < seconds - 2; i++) { f.push_back({ t, g(r), 0.95f }); t += i == 0 ? 2.0 : 6.0; }
+        return f;
+    };
+    {   // ... the same station, and the dongle is cold: the crystal moves 20 ppm in five minutes.
+        // The tuning offset moves with it (it is read all the time), so the figure must too.
+        Script sc; sc.truePpm = 40; sc.warmPpm = 20; sc.seconds = 300; sc.verbose = verbose;
+        std::mt19937 r(22); std::normal_distribution<double> g(0, 10);
+        double t = 8; for (int i = 0; t < 295; i++) { sc.feeds.push_back({ t, g(r), 0.65f }); t += i == 0 ? 2.0 : 6.0; }
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "clock figure %+.1f ppm at the end (true: +60.0), never more than %.1f ppm from the truth", o.last, o.worst);
+        check("... while the crystal warms up 40 -> 60 ppm", o.worst < 9.0, d);
+    }
+    {   // A normal station: nothing of the above may get in its way. "Measured" within half a
+        // minute, and then right to a ppm.
+        Script sc; sc.truePpm = 58.2; sc.tuningErrPpm = 1.5; sc.feeds = normal(90, 31); sc.seconds = 90; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "\"measured\" from %.0f s, clock figure %+.1f ppm at the end, never more than %.1f ppm from the true +58.2", o.measuredAt, o.last, o.worst);
+        check("a normal station: measured, and right", o.state == 2 && o.measuredAt > 0 && o.measuredAt <= 32 && std::fabs(o.lastErr) < 1.0 && o.worst < 4.0 && o.unused == 0, d);
+    }
+    {   // A normal station and ONE wild measurement, the fourth (60 frames off: under the 200
+        // the aligner itself would call a jump). It must not carry the figure away.
+        Script sc; sc.truePpm = 58.2; sc.feeds = normal(60, 32); sc.feeds[3].errFrames = 60; sc.seconds = 60; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "clock figure %+.1f ppm at the end, never more than %.1f ppm from the true +58.2", o.last, o.worst);
+        check("a normal station, 4th measurement 60 frames off", o.worst < 9.0 && std::fabs(o.lastErr) < 3.0, d);
+    }
+    {   // The other way round: the TUNING OFFSET is the witness that is wrong (it says -57, the
+        // crystal is +57 - a station far off its frequency, a dongle with two crystals) and the
+        // audio is as clean as a normal station's. First the fence holds the figure near the
+        // tuning offset (and says the audio was refused); half a minute of measurements that
+        // agree with each other later the audio wins, and the status says so.
+        Script sc; sc.truePpm = 57; sc.tuningErrPpm = -114; sc.feeds = normal(120, 33); sc.seconds = 120; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "audio refused at first: %s; \"measured\" from %.0f s; clock figure %+.1f ppm at the end (true +57.0); the tuning offset's %+.0f ppm marked as not used: %s",
+                 o.audioRefused ? "yes" : "NO", o.measuredAt, o.last, o.unusedPpm, o.unused == 2 ? "yes" : "NO");
+        check("a tuning offset that is wrong altogether", o.audioRefused && o.measuredAt > 0 && o.measuredAt <= 60 && std::fabs(o.lastErr) < 1.5 && o.unused == 2, d);
+    }
+    {   // ... and one that is only 12 ppm out (a station 1.1 kHz off its frequency): the figure
+        // waits at the fence, 4 ppm short, and is let through once the audio has made its case.
+        Script sc; sc.truePpm = 57; sc.tuningErrPpm = 12; sc.feeds = normal(120, 34); sc.seconds = 120; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "\"measured\" from %.0f s; clock figure %+.1f ppm at the end (true +57.0), never more than %.1f ppm off", o.measuredAt, o.last, o.worst);
+        check("a tuning offset 12 ppm out", o.measuredAt > 0 && o.measuredAt <= 60 && std::fabs(o.lastErr) < 1.5 && o.worst < 12.5, d);
+    }
+    {   // No tuning offset at all (it reads nonsense): as before build 8, the audio alone.
+        Script sc; sc.truePpm = -57; sc.haveGuess = false; sc.feeds = normal(90, 35); sc.seconds = 90; sc.verbose = verbose;
+        ScriptOutcome o = play(sc);
+        snprintf(d, sizeof(d), "\"measured\" from %.0f s; clock figure %+.1f ppm at the end (true -57.0)", o.measuredAt, o.last);
+        check("no tuning offset: the audio alone", o.measuredAt > 0 && o.measuredAt <= 32 && std::fabs(o.lastErr) < 1.0, d);
+    }
+}
+
 static void report(const char *name, const Outcome &o, bool pass) {
     if (!pass) failures++;
-    printf("%s %-44s ok after %5.1f s (%3.0f %% of the time since)  HD at %5.1f s (%3.0f %%), fades %d/%d  offset moved <= %4.1f fr  clock figure %+5.1f ppm off  [%d of %d accepted]\n",
-           pass ? "PASS" : "FAIL", name, o.firstOk, o.okShare * 100, o.toHdAt, o.hdShare * 100, o.toHd, o.toAnalog, o.worst, o.ppmErr, o.accepted, o.measurements);
+    printf("%s %-44s ok after %5.1f s (%3.0f %% of the time since)  HD at %5.1f s (%3.0f %%), fades %d/%d  offset moved <= %4.1f fr  clock figure %+5.1f ppm off (never more than %4.1f)  [%d of %d accepted, r %.2f]\n",
+           pass ? "PASS" : "FAIL", name, o.firstOk, o.okShare * 100, o.toHdAt, o.hdShare * 100, o.toHd, o.toAnalog, o.worst, o.ppmErr, o.clockWorst, o.accepted, o.measurements, o.rAvg);
     fflush(stdout);
 }
 
@@ -248,6 +412,7 @@ int main(int argc, char **argv) {
                runs, locked, first / std::max(1, locked), ok / runs * 100, hd / runs * 100, fades / runs, worst / runs, worstMax, perr / runs);
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "tracker")) { trackerTests(argc > 2); printf("%d failure(s)\n", failures); return failures; }
     if (argc > 2) {                                                  // one run
         Setup su; double p = atof(argv[1]); su.ppm = [p](double) { return p; }; su.seconds = atof(argv[2]);
         for (int a = 3; a < argc; a++) {
@@ -255,6 +420,9 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "off")) su.correction = false;
             else if (!strcmp(argv[a], "v")) su.verbose = true;
             else if (!strncmp(argv[a], "lost=", 5)) { su.lostAt = 70; su.lostFrames = atof(argv[a] + 5); }
+            else if (!strncmp(argv[a], "wander=", 7)) su.wanderFrames = atof(argv[a] + 7);
+            else if (!strncmp(argv[a], "noise=", 6)) su.noise = atof(argv[a] + 6);
+            else if (!strncmp(argv[a], "seed=", 5)) su.seed = (unsigned)atoi(argv[a] + 5);
             else su.guessErrPpm = atof(argv[a]);
         }
         Outcome o = run(su);
@@ -263,6 +431,7 @@ int main(int argc, char **argv) {
     }
     char name[100];
     stretchTests();
+    trackerTests(false);
     // 1. The app before build 6 (no correction): fine with a good crystal, lost with a cheap one.
     { Setup su; su.correction = false; su.ppm = [](double) { return 1.0; }; Outcome o = run(su);
       report("no correction, 1 ppm (a good dongle)", o, o.firstOk > 0 && o.firstOk < 20 && o.toHdAt > 0); }
@@ -273,7 +442,8 @@ int main(int argc, char **argv) {
         Setup su; su.ppm = [p](double) { return p; }; su.guessErrPpm = p >= 0 ? 1.5 : -1.5;
         Outcome o = run(su);
         snprintf(name, sizeof(name), "%+.0f ppm", p);
-        report(name, o, o.firstOk > 0 && o.firstOk < 20 && o.okShare > 0.6 && o.toHdAt > 0 && o.toHdAt < 21 && o.toAnalog == 0 && o.worst <= 3.5 && std::fabs(o.ppmErr) < 1.5);
+        report(name, o, o.firstOk > 0 && o.firstOk < 20 && o.okShare > 0.6 && o.toHdAt > 0 && o.toHdAt < 21 && o.toAnalog == 0 && o.worst <= 3.5 && std::fabs(o.ppmErr) < 1.5
+                        && o.clockWorst < 5.0);
     }
     // 3. A first guess that is off (the station's own carrier is out by 5 or 10 ppm).
     for (double ge : { 5.0, -5.0, 10.0, -10.0 }) {
@@ -289,8 +459,15 @@ int main(int argc, char **argv) {
         snprintf(name, sizeof(name), "%+.0f ppm, no first guess", p);
         report(name, o, o.firstOk > 0 && o.firstOk < 40 && o.toHdAt > 0 && o.toHdAt < 45 && o.toAnalog <= 2 && o.worst <= 6.0 && std::fabs(o.ppmErr) < 2.0);
     }
-    { Setup su; su.ppm = [](double) { return 57.0; }; su.guessErrPpm = -114.0; Outcome o = run(su);
-      report("+57 ppm, first guess says -57", o, o.firstOk > 0 && o.firstOk < 45 && o.toHdAt > 0 && o.toHdAt < 50 && o.toAnalog <= 2 && o.worst <= 6.0 && std::fabs(o.ppmErr) < 2.0); }
+    // (Build 8: a tuning offset that is wrong altogether has to be PROVED wrong now - six
+    // measurements on a tight line, three times running - so this takes about a minute where
+    // build 6 took 25 s, and because the analog drifted all that time the aligner's "middle
+    // one of the last nine" is stale when it finally says ok: a few detours through the
+    // analog follow while it catches up, then it is steady (from ~160 s here). The price for
+    // not believing three measurements over the tuning offset - which is the fault that was
+    // seen in the field; this one never has been.)
+    { Setup su; su.ppm = [](double) { return 57.0; }; su.guessErrPpm = -114.0; su.seconds = 300; Outcome o = run(su);
+      report("+57 ppm, first guess says -57", o, o.firstOk > 0 && o.firstOk < 80 && o.toHdAt > 0 && o.toHdAt < 85 && o.toAnalog <= 5 && o.hdShare > 0.95 && std::fabs(o.ppmErr) < 2.0); }
     // 5. A crystal that warms up: 40 -> 60 ppm in the first ten minutes.
     { Setup su; su.seconds = 900; su.ppm = [](double t) { return 40.0 + 20.0 * std::min(1.0, t / 600.0); };
       Outcome o = run(su);
@@ -310,6 +487,23 @@ int main(int argc, char **argv) {
     { Setup su; su.ppm = [](double) { return 57.0; }; su.lostAt = 70; su.lostFrames = 120; su.seconds = 180;
       Outcome o = run(su);
       report("+57 ppm, samples worth 120 frames lost at 70 s", o, o.firstOk > 0 && o.firstOk < 20 && o.toAnalog <= 1 && std::fabs(o.ppmErr) < 1.5 && o.hdShare > 0.98 && o.worst > 100 && o.worst < 125); }
+    // 6c. Build 8: a station whose analog and HD audio are processed differently. The two
+    //     match only loosely (r 0.6-0.7) and single measurements land 10-20 frames off - with
+    //     build 7 one or two of those were taken for the crystal ("+103 ppm" on a +58 ppm
+    //     dongle, seen in a tester's video; the clock figure here was up to 50 ppm out in five
+    //     of these eight runs). The figure must stay with the tuning offset: never further
+    //     than the fence from it. (How often the BLEND goes to HD on such a station is the
+    //     aligner's business - it wants two measurements in a row within 3 frames - and not
+    //     judged here.)
+    for (unsigned seed : { 1u, 2u, 3u, 4u, 6u, 7u, 8u, 9u }) {
+        Setup su; su.ppm = [](double) { return 58.0; }; su.wanderFrames = 12; su.noise = 0.05; su.seconds = 180; su.seed = seed;
+        Outcome o = run(su);
+        snprintf(name, sizeof(name), "+58 ppm, processed differently (run %u)", seed);
+        report(name, o, o.clockWorst < 9.5 && o.rAvg < 0.8);
+    }
+    { Setup su; su.ppm = [](double) { return -100.0; }; su.guessErrPpm = -1.5; su.wanderFrames = 12; su.noise = 0.05; su.seconds = 600; su.seed = 4;
+      Outcome o = run(su);
+      report("-100 ppm, processed differently, 10 minutes", o, o.clockWorst < 9.5 && o.rAvg < 0.8); }
     // 7. The long haul: an hour each. Without the correction 57 ppm is 9,000 frames (0.2 s) an hour.
     for (double p : { 57.0, -100.0, 0.5 }) {
         Setup su; su.seconds = 3600; su.ppm = [p](double) { return p; };

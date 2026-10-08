@@ -1076,6 +1076,8 @@ class MainActivity : AppCompatActivity() {
      *   "analog lags HD1 by 2485.1 ms (r 0.96), analog -0.2 dB
      *    5 measurements"
      * Build 6 adds a last line: "dongle clock +57.4 ppm (measured) - corrected".
+     * Build 8: and one more when the tuning offset and the audio contradict each other:
+     * "audio measurement +103 ppm not used: too far from the tuning offset".
      * Before the first result: "waiting for HD audio" / "measuring…", or
      * "no match" when the two streams don't correlate (e.g. HD1 and analog
      * carrying different programs).
@@ -1120,7 +1122,16 @@ class MainActivity : AppCompatActivity() {
             s.clockState == "guess" -> f("\ndongle clock about %+.0f ppm (from the tuning offset)%s", s.clockPpm, corrected)
             else -> ""
         }
-        return listOf("Alignment" to text + same + clock)
+        // Build 8: the two ways of measuring the clock disagree, and one of them was not
+        // believed (drift.hpp, "Which of the two to believe"). Rare - worth seeing in a
+        // tester's screenshot: one noisy audio measurement, or a station off its frequency.
+        val unused = when {
+            clock.isEmpty() -> ""
+            s.clockUnused == "audio" -> f("\naudio measurement %+.0f ppm not used: too far from the tuning offset", s.clockUnusedPpm)
+            s.clockUnused == "tuning" -> f("\ntuning offset %+.0f ppm not used: the audio measurements disagree", s.clockUnusedPpm)
+            else -> ""
+        }
+        return listOf("Alignment" to text + same + clock + unused)
     }
 
     /**

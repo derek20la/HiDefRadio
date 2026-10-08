@@ -43,6 +43,30 @@
 //   measurement the correction is exactly zero, and the Stretch then copies its input
 //   bit for bit.
 //
+//   Which of the two to believe (build 8)
+//   The tuning error and the audio are two witnesses to the same crystal, and they are
+//   good at different things. The tuning error is there within a second or two and is
+//   never far out - a ppm or two. The audio ends up ten times better, but it needs half a
+//   minute of measurements that agree with each other; from two or three of them it can be
+//   wildly wrong, and on a station whose analog and HD audio are processed differently
+//   (they match only loosely: r 0.5-0.7) measurements keep landing 10-20 frames off.
+//   A tester's screen video showed what that does (2026-10-08, a Nooelec dongle +58 ppm
+//   fast, a station with r 0.71): two measurements agreed, the third was ~14 frames off,
+//   the line through the three said "+103 ppm" - and that was applied. So:
+//     - The audio may REFINE what the tuning error says, but not contradict it: the clock
+//       figure stays within FENCE_PPM of the tuning error ...
+//     - ... unless the audio has a strong case: STRONG_POINTS measurements over
+//       STRONG_SPAN_S that lie on a straight line as tightly as a normal station's do, and
+//       that OVERRULE_FITS times running. Then it is the tuning error that is wrong (a
+//       station off its frequency, a dongle that isn't built the usual way) and the audio
+//       takes over. That costs such a dongle half a minute more; nothing else can tell
+//       the two cases apart.
+//     - Before the audio gets a say at all, its measurements are checked against each
+//       other: there must be four of them, and they must lie on a straight line about as
+//       tightly as a normal station's do. On a station where they scatter, the tuning
+//       error alone sets the correction - and the odd ones out are not mistaken for
+//       lost samples.
+//
 //   A bonus: when the dongle LOSES a few samples on the way (a USB hiccup), the analog
 //   jumps against the HD by a few frames - each lost sample is 1/33.75 of a frame. The
 //   tracker sees two measurements in a row land off its line by the same amount, and
@@ -179,9 +203,9 @@ private:
 
 // ---- Tracker: how much to stretch ------------------------------------------------------------
 struct Status {
-    int    state = 0;        // 0 = nothing known (no correction), 1 = first guess (tuning error), 2 = measured from the audio
+    int    state = 0;        // 0 = nothing known (no correction), 1 = from the tuning error, 2 = measured from the audio
     double ppm = 0;          // the correction in use right now, parts per million (> 0 = the dongle's clock is fast)
-    double clockPpm = 0;     // the dongle's clock error as best known (the fitted slope, or the first guess)
+    double clockPpm = 0;     // the dongle's clock error as best known (the fitted slope, or the tuning error's figure)
     double guessPpm = 0;     // what the tuning error says (0 until it has settled)
     bool   haveGuess = false;
     int    points = 0;       // measurements in the fit
@@ -189,14 +213,21 @@ struct Status {
     double errorFrames = 0;  // how far the analog is from where it should sit right now (the Stretch is closing this)
     int    restarts = 0;     // times the fit started over because the offset really moved (not counting re-anchored HD)
     int    skipped = 0;      // single measurements left out because they were far off the line
+    int    unused = 0;       // one of the two witnesses was not believed: 1 = the audio (too far from the tuning error,
+                             // and no strong case), 2 = the tuning error (the audio proved it wrong)
+    double unusedPpm = 0;    // ... and what that witness says
+    double scatter = 1;      // how much more the measurements scatter than a normal station's (1 = as usual)
 };
 
 class Tracker {
 public:
     // -- the first guess --
     static constexpr double GUESS_AFTER_S   = 2.0;    // the demodulator's offset reading needs this long to settle
-    static constexpr double GUESS_SMOOTH_S  = 4.0;    // ... and wobbles with the music (+-100 Hz and more): average it
-    static constexpr double GUESS_MAX_PPM   = 200.0;  // more than this is no crystal error (the worst dongles: ~100)
+    static constexpr double GUESS_SMOOTH_S  = 4.0;    // ... and wobbles with the music (+-100 Hz and more): average it over
+    static constexpr double GUESS_SMOOTH_MAX_S = 20.0; // this long at first, and longer as time goes by, up to this (build 8:
+                                                      // on a station whose audio can't be used, this reading IS the correction)
+    static constexpr double GUESS_MAX_PPM   = 160.0;  // more than this is no crystal error (the worst dongles: ~100) - an
+                                                      // empty channel can read anything (seen: "+171 ppm" on 87.75)
     static constexpr double GUESS_SIGMA_PPM = 3.0;    // how far we trust it (1 sigma): our reading wobbles ~1 ppm, an HD
                                                       // station's carrier is good to ~1 ppm (seen: guess within 1.5 ppm)
     static constexpr double KEPT_SIGMA_PPM  = 2.0;    // trust in OUR last measurement after the HD audio was re-anchored
@@ -206,11 +237,25 @@ public:
     static const int        MAX_POINTS      = 13;     // ... at most this many
     static constexpr double POINT_SIGMA     = 1.0;    // scatter of one good measurement, frames (measured: 1-1.5 at r 0.96)
     static constexpr double POINT_SIGMA_R   = 4.0;    // ... plus this x (1 - r): weaker matches scatter more
-    static constexpr double MEASURED_SPAN_S = 6.0;    // "measured" needs 3 points over at least this long
+    static constexpr double MEASURED_SPAN_S = 6.0;    // a line through the audio needs 3 points over at least this long
     static constexpr double DOUBT_SIGMAS    = 3.0;    // measurements this clearly against the expected slope win outright
     static const int        SETTLED_POINTS  = 5;      // from this many points on, the line is trusted enough to ...
     static constexpr double MISS_SIGMAS     = 3.5;    // ... leave out a single point this far off it
     static constexpr double HEAL_FRAMES     = 30.0;   // a real step up to this size is steered away again (see addMeasurement)
+    // -- which witness to believe (see "Which of the two to believe" at the top) --
+    static const int        AUDIO_POINTS    = 4;      // fewer measurements than this can't be checked against each other (see fit)
+    static constexpr double FENCE_PPM       = 8.0;    // without a strong case the clock figure stays this close to the tuning
+                                                      // error (which is good to 1-3 ppm: this is its "can't be further out").
+                                                      // 8 ppm is 2 frames between two measurements - the most that still
+                                                      // lets the aligner call them "the same" (its AGREE_FRAMES is 3).
+    static const int        STRONG_POINTS   = 6;      // a strong case: at least this many measurements ...
+    static constexpr double STRONG_SPAN_S   = 20.0;   // ... over at least this long ...
+    static constexpr double STRONG_SURE_PPM = 2.0;    // ... which pin the slope down to this (1 sigma), scattering no more than usual
+    static const int        OVERRULE_FITS   = 3;      // ... and against the tuning error this many measurements running
+    static constexpr double SCATTER_DOUBT   = 2.0;    // measurements scattering more than this x what we assume: no say on the slope
+    static constexpr double SCATTER_FADE    = 0.85;   // ... and that is forgotten only this fast (per measurement) once they stop
+    static constexpr double GOOD_SURE_PPM   = 3.0;    // "measured": the audio alone knows the slope at least as well as the
+                                                      // tuning error does (a normal station: after 4-5 measurements, ~20 s)
     // -- the steering --
     static constexpr double PULL_FAST_S     = 4.0;    // close a leftover distance in about this long while the line is young ...
     static constexpr double PULL_S          = 15.0;   // ... and this gently once it is settled (see update)
@@ -227,6 +272,7 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         t_ = 0; guess_ = 0; haveGuess_ = false;
         kept_ = 0; haveKept_ = false;
+        overruled_ = false; against_ = 0; scatter_ = 1;
         epoch_ = -1; restart();
         cpFill_ = 0; cpNext_ = 0;
         st_ = Status();
@@ -255,12 +301,16 @@ public:
         if (stationHz > 1e6 && t_ >= GUESS_AFTER_S) {
             double g = -offsetHz / stationHz;
             if (std::fabs(g) <= GUESS_MAX_PPM * 1e-6) {
+                // averaged over about half the time since it became usable: quick to settle,
+                // steadier later, and still following a crystal that warms up (20 ppm in ten
+                // minutes is 0.03 ppm a second)
+                const double smooth = std::min(GUESS_SMOOTH_MAX_S, std::max(GUESS_SMOOTH_S, 0.5 * (t_ - GUESS_AFTER_S)));
                 if (!haveGuess_) { guess_ = g; haveGuess_ = true; }
-                else guess_ += (g - guess_) * std::min(1.0, blockSeconds / GUESS_SMOOTH_S);
+                else guess_ += (g - guess_) * std::min(1.0, blockSeconds / smooth);
             }
         }
         // b) the measured line, if there is one, and the pull toward it
-        double clock = pts_.empty() ? expected() : fitB_;
+        double clock = slope();
         double pull = 0, err = 0;
         if (!pts_.empty()) {
             // the slip that would put the analog exactly `target_` frames behind the HD right now
@@ -302,8 +352,11 @@ public:
         p.c = at; p.y = offset + slipAt(at);
         p.sigma = POINT_SIGMA + POINT_SIGMA_R * (1.0 - std::min(1.f, std::max(0.f, corr)));
         bool stepped = false; double step = 0;
-        if (measured_ && pts_.size() >= (size_t)SETTLED_POINTS) {
-            // The line is well known by now. A point far off it is a bad measurement - leave
+        if (good_ && pts_.size() >= (size_t)SETTLED_POINTS) {
+            // The line is well known by now (good_: it is the audio's own line, and a tight one -
+            // not a line held at the fence, which the audio is busy contradicting, and not one on
+            // a station whose measurements scatter: there 10 frames off is nothing special, and
+            // must not be mistaken for lost samples). A point far off it is a bad measurement - leave
             // it out. But two in a row that agree with EACH OTHER are a real step: the dongle
             // lost a few samples on the way (a USB hiccup: every lost sample moves the analog
             // 1/33.75 of a frame against the HD), or the station's delay moved. Then the line
@@ -352,7 +405,7 @@ public:
     // to assume while the analog audio is switched off and the Stretch stands still.
     double clock() const {
         std::lock_guard<std::mutex> lock(m_);
-        return !enabled_ ? 0.0 : pts_.empty() ? expected() : fitB_;
+        return !enabled_ ? 0.0 : slope();
     }
     Status status() const { std::lock_guard<std::mutex> lock(m_); return st_; }
 
@@ -363,20 +416,31 @@ private:
 
     // What status() shows (call with m_ held).
     void publish() {
-        // "measured" also while a fresh run of points still leans on the slope measured before
-        st_.state = !enabled_ ? 0 : (measured_ || useKept_) ? 2 : (haveGuess_ || !pts_.empty()) ? 1 : 0;
-        st_.clockPpm = (pts_.empty() ? expected() : fitB_) * 1e6;
+        // "measured" = the audio's line is in use and good enough to deserve the word (fit()) -
+        // also while a fresh run of points still leans on the slope measured before
+        st_.state = !enabled_ ? 0 : (good_ || (useKept_ && !fenced_)) ? 2 : (haveGuess_ || !pts_.empty()) ? 1 : 0;
+        st_.clockPpm = slope() * 1e6;
         st_.points = (int)pts_.size();
+        st_.scatter = scatter_;
+        st_.unused = (fenced_ && haveAudio_) ? 1 : (overruled_ && haveGuess_) ? 2 : 0;
+        st_.unusedPpm = (st_.unused == 1 ? audio_ : st_.unused == 2 ? guess_ : 0.0) * 1e6;
     }
 
     // The slope we expect before the audio has had its say: our own result from before the
-    // offsets started over (same crystal), else the first guess, else nothing.
-    double expected() const { return useKept_ ? keptThen_ : haveGuess_ ? guess_ : 0.0; }
-    double expectedSigma() const { return (useKept_ ? KEPT_SIGMA_PPM : haveGuess_ ? GUESS_SIGMA_PPM : BLIND_SIGMA_PPM) * 1e-6; }
+    // offsets started over (same crystal), else the tuning error's (unless the audio has
+    // proved that one wrong), else nothing.
+    bool trustGuess() const { return haveGuess_ && !overruled_; }
+    // The slope in use: the fitted line's - or, while the audio has no say on it (leaning_,
+    // see fit), the expectation as it is NOW: the tuning error is read all the time and
+    // may have moved on since the last measurement.
+    double slope() const { return pts_.empty() || leaning_ ? expected() : fitB_; }
+    double expected() const { return useKept_ ? keptThen_ : trustGuess() ? guess_ : 0.0; }
+    double expectedSigma() const { return (useKept_ ? KEPT_SIGMA_PPM : trustGuess() ? GUESS_SIGMA_PPM : BLIND_SIGMA_PPM) * 1e-6; }
 
     // The offsets start over (call with m_ held); what we know about the crystal stays.
     void restart() {
-        pts_.clear(); measured_ = false; held_ = false; misses_ = 0; healing_ = false;
+        pts_.clear(); good_ = false; fenced_ = false; leaning_ = false; haveAudio_ = false; against_ = 0;
+        held_ = false; misses_ = 0; healing_ = false;
         useKept_ = haveKept_; keptThen_ = kept_;       // (a copy: kept_ itself moves on with every new fit)
         fitA_ = 0; fitB_ = expected(); fitC0_ = 0; target_ = 0;
     }
@@ -401,16 +465,30 @@ private:
 
     // Straight line through the points: y = A + B * (c - c0), c0 = the newest point. Least
     // squares, each point weighted by its scatter, plus ONE extra "measurement": the slope
-    // we expect, with its uncertainty. With two points 2 s apart the audio says little about
-    // the slope (+-20 ppm) and the expectation rules; after half a minute the audio knows it
-    // to a fraction of a ppm and the expectation no longer matters. And if the audio clearly
-    // contradicts the expectation (the guess was wrong - a station far off its frequency, a
-    // dongle that isn't built the usual way), the expectation is dropped at once.
+    // we expect, with its uncertainty. With a few points the audio says little about the
+    // slope and the expectation rules; after half a minute the audio knows it to a fraction
+    // of a ppm and the expectation no longer matters.
+    //
+    // Build 8 - who may overrule whom (the reasons are at the top of the file):
+    //   1. The audio has a say on the SLOPE only when its points can be checked against each
+    //      other and pass: at least AUDIO_POINTS of them (three - two of them 2 s apart, the
+    //      third 6 s later - always "lie on a line": if one is a bad one, nothing in them
+    //      shows it), and lying on their own best line about as tightly as a normal
+    //      station's do (not more than SCATTER_DOUBT times what we assume for them). Until
+    //      then, and on a station that scatters, the slope is the expected one and the
+    //      points only say where the line sits.
+    //   2. Only a STRONG case - more measurements, over longer - may throw the expectation
+    //      out altogether. (Build 6 let three points do it.)
+    //   3. The fence: unless the audio has made its strong case OVERRULE_FITS times running,
+    //      the result stays within FENCE_PPM of what the tuning error says.
+    //   With no expectation at all (no usable tuning error, nothing measured before) the
+    //   audio decides alone from the second point on, as it always did.
     void fit() {
         const size_t n = pts_.size();
         fitC0_ = pts_.back().c;
         double b0 = expected(), s0 = expectedSigma();
-        if (n == 1) { fitA_ = pts_[0].y; fitB_ = b0; measured_ = false; st_.spreadFrames = 0; return; }
+        good_ = false; fenced_ = false; leaning_ = false; haveAudio_ = false;
+        if (n == 1) { fitA_ = pts_[0].y; fitB_ = b0; leaning_ = true; against_ = 0; st_.spreadFrames = 0; return; }
         // work in seconds so the numbers stay tame: slope in frames per second
         double sw = 0, swt = 0, swtt = 0, swy = 0, swty = 0;
         for (const Point &p : pts_) {
@@ -419,22 +497,72 @@ private:
         }
         const double span = (double)(pts_.back().c - pts_.front().c) / RATE;
         double det = sw * swtt - swt * swt;
-        if (n >= 3 && span >= MEASURED_SPAN_S && det > 0) {
-            // what the audio alone says, and how sure it is
-            double alone = (sw * swty - swt * swy) / det, sure = std::sqrt(sw / det);
-            if (std::fabs(alone - b0 * RATE) > DOUBT_SIGMAS * (sure + s0 * RATE)) s0 = BLIND_SIGMA_PPM * 1e-6;
+        double sure = 1e9;                              // how well the audio ALONE knows the slope (1 sigma, frames/s)
+        bool strong = false;
+        haveAudio_ = n >= 3 && span >= MEASURED_SPAN_S && det > 0;    // enough points for a line of the audio's own
+        if (haveAudio_) {
+            const double alone = (sw * swty - swt * swy) / det;
+            audio_ = alone / RATE;                                    // (kept for the status)
+            // 1. The scatter: how far the points lie from their OWN best line, in units of
+            //    what we assume for them (1 = as assumed; a normal station: 1 to 1.5). A
+            //    station that has scattered stays under suspicion for a while - the figure
+            //    comes down only slowly (SCATTER_FADE per measurement: from 3 back to 1 takes
+            //    ~40 s of good ones) - or one on the border would be trusted every other time.
+            double now = 1.0;
+            if (n >= (size_t)AUDIO_POINTS) {
+                const double a0 = (swy * swtt - swt * swty) / det;
+                double chi = 0;
+                for (const Point &p : pts_) {
+                    double d = (p.y - a0 - alone * (double)(p.c - fitC0_) / RATE) / p.sigma;
+                    chi += d * d;
+                }
+                const double s = std::sqrt(chi / (double)(n - 2));
+                if (s > SCATTER_DOUBT) now = s;
+            }
+            scatter_ = std::max(now, std::max(1.0, scatter_ * SCATTER_FADE));
+            sure = std::sqrt(sw / det);
+            // 2. a strong case?
+            strong = n >= (size_t)STRONG_POINTS && span >= STRONG_SPAN_S && scatter_ == 1.0
+                     && sure <= STRONG_SURE_PPM * 1e-6 * RATE;
+            // 3. ... against the tuning error, and for how long now?
+            if (trustGuess()) {
+                against_ = strong && std::fabs(alone / RATE - guess_) > FENCE_PPM * 1e-6 ? against_ + 1 : 0;
+                if (against_ >= OVERRULE_FITS) {        // the tuning error is out, for the rest of this tune
+                    overruled_ = true;
+                    b0 = expected(); s0 = expectedSigma();
+                }
+            }
+            // ... or against our own earlier result (after the offsets started over)
+            if (strong && std::fabs(alone - b0 * RATE) > DOUBT_SIGMAS * (sure + s0 * RATE)) s0 = BLIND_SIGMA_PPM * 1e-6;
+        } else against_ = 0;
+        const bool checked = n >= (size_t)AUDIO_POINTS && scatter_ == 1.0;   // 1.: the audio has a say on the slope
+        const bool lean = useKept_ || trustGuess();                          // there is an expectation to lean on
+        if (lean && !checked) {
+            fitB_ = b0;                                               // the expected slope ...
+            fitA_ = (swy - fitB_ * RATE * swt) / sw;                  // ... and the best line WITH that slope
+            leaning_ = true;
+        } else {
+            // the expectation as one more measurement
+            const double lam = 1.0 / ((s0 * RATE) * (s0 * RATE));
+            const double swttE = swtt + lam, swtyE = swty + lam * (b0 * RATE);
+            det = sw * swttE - swt * swt;
+            if (det <= 0) return;
+            fitA_ = (swy * swttE - swt * swtyE) / det;
+            fitB_ = (sw * swtyE - swt * swy) / det / RATE;            // back to frames per frame
         }
-        double lam = 1.0 / ((s0 * RATE) * (s0 * RATE));
-        swtt += lam; swty += lam * (b0 * RATE);
-        det = sw * swtt - swt * swt;
-        if (det <= 0) return;
-        fitA_ = (swy * swtt - swt * swty) / det;
-        fitB_ = (sw * swty - swt * swy) / det / RATE;                 // back to frames per frame
+        // 3. the fence
+        if (trustGuess() && std::fabs(fitB_ - guess_) > FENCE_PPM * 1e-6) {
+            fitB_ = guess_ + (fitB_ > guess_ ? FENCE_PPM : -FENCE_PPM) * 1e-6;
+            fitA_ = (swy - fitB_ * RATE * swt) / sw;
+            fenced_ = true; leaning_ = false;
+        }
         double ss = 0;
         for (const Point &p : pts_) { double d = p.y - fitA_ - fitB_ * (double)(p.c - fitC0_); ss += d * d; }
         st_.spreadFrames = std::sqrt(ss / (double)n);
-        measured_ = n >= 3 && span >= MEASURED_SPAN_S;
-        if (measured_) { kept_ = fitB_; haveKept_ = true; }           // for the next time the offsets start over
+        // "measured": the audio's own line is in use (checked, or there was nothing else),
+        // not held back at the fence, and it knows the slope well enough
+        good_ = (checked || !lean) && scatter_ == 1.0 && !fenced_ && sure <= GOOD_SURE_PPM * 1e-6 * RATE;
+        if (good_) { kept_ = fitB_; haveKept_ = true; }               // for the next time the offsets start over
     }
 
     mutable std::mutex m_;
@@ -445,7 +573,12 @@ private:
     int epoch_ = -1;
     long long target_ = 0; bool held_ = false;       // the offset the analog is held at (held_: fixed, the aligner said ok)
     double fitA_ = 0, fitB_ = 0; long long fitC0_ = 0;
-    bool measured_ = false;
+    bool good_ = false;                              // "measured": the audio's line is in use and knows the slope well enough
+    bool fenced_ = false;                            // the fit wanted further from the tuning error than it may go
+    bool leaning_ = false;                           // the slope is the expectation's: the audio has no say on it (yet)
+    double audio_ = 0; bool haveAudio_ = false;      // what the audio alone says (for the status), once it has a line of its own
+    double scatter_ = 1;                             // how much more the measurements scatter than assumed (1 = as assumed)
+    int against_ = 0; bool overruled_ = false;       // the audio's strong case against the tuning error: fits running / won
     double kept_ = 0; bool haveKept_ = false;        // the slope we measured, kept across restarts ...
     bool useKept_ = false; double keptThen_ = 0;     // ... and whether THIS run of points started with it (and its value then)
     int misses_ = 0; Point lastMiss_;

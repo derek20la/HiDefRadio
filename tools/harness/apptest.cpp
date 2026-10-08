@@ -82,10 +82,12 @@ int main(int argc, char **argv) {
             if (getenv("SIGDUMP") && !dumped && t >= atof(getenv("SIGDUMP"))) { dumped = true; printf("---- getSignalNative at %.2f s ----\n%s----\n", t, sig.c_str()); }
             std::map<std::string, std::string> kv; std::stringstream ss(sig); std::string line;
             while (getline(ss, line)) { size_t eq = line.find('='); if (eq != std::string::npos) kv[line.substr(0, eq)] = line.substr(eq + 1); }
-            printf("%7.2f  prog %d  synced %s  align %-9s %7s ms %s fr r %s n=%s/%s  blend %-8s toHd %s toAnalog %s  '%s'  clock %s ppm (%s, in use %s, err %s fr) carrier %s Hz  rds %s '%s' same %s '%s'\n", t, (int)J(getProgramNative)(E, nullptr),
+            printf("%7.2f  prog %d  synced %s  align %-9s %7s ms %s fr r %s n=%s/%s  blend %-8s toHd %s toAnalog %s  '%s'  clock %s ppm (%s, in use %s, err %s fr, tuning says %s%s%s%s, scatter x%s) carrier %s Hz  rds %s '%s' same %s '%s'\n", t, (int)J(getProgramNative)(E, nullptr),
                    kv["synced"].c_str(), kv["alignState"].c_str(), kv["alignMs"].c_str(), kv["alignFrames"].c_str(), kv["alignCorr"].c_str(), kv["alignCount"].c_str(), kv["alignTries"].c_str(),
                    kv["blendState"].c_str(), kv["blendToHd"].c_str(), kv["blendToAnalog"].c_str(), kv["blendReason"].c_str(),
-                   kv["clockPpm"].c_str(), kv["clockState"].c_str(), kv["clockUsePpm"].c_str(), kv["clockErr"].c_str(), kv["fmOffsetHz"].c_str(),
+                   kv["clockPpm"].c_str(), kv["clockState"].c_str(), kv["clockUsePpm"].c_str(), kv["clockErr"].c_str(), kv["clockGuessPpm"].c_str(),
+                   kv["clockUnused"].empty() ? "" : "; NOT USED: ", kv["clockUnused"].c_str(), kv["clockUnused"].empty() ? "" : (" " + kv["clockUnusedPpm"]).c_str(),
+                   kv["clockScatter"].c_str(), kv["fmOffsetHz"].c_str(),
                    kv["rdsPi"].c_str(), kv["rdsCall"].c_str(), kv["hdSame"].c_str(), kv["hdSameCall"].c_str());
             if (kv["am"] == "1")       // AM: no analog / alignment / blend - show what matters there instead
                 printf("        AM  mode %s  ber %s  kbps %s  gain %s dB (auto %s)  direct sampling %s  peak %s dBFS  '%s'\n", kv["mode"].c_str(), kv["ber"].c_str(),

@@ -103,7 +103,7 @@
     <string name="settings_about">About</string>
     <!-- Build 7: the welcome card - shown at the first start, and under Settings > About -->
     <string name="welcome_title">Welcome to HiDef Radio</string>
-    <string name="welcome_text">1. Plug an RTL-SDR dongle into the phone with a USB-OTG adapter, and connect an antenna.\n\n2. Tap the frequency display to type in a station, for example 101.1.\n\n3. The arrows step through the band. The star saves a favorite.\n\n4. The sound starts in analog FM. On a station with HD Radio it blends to HD by itself after about ten seconds.\n\nYou can read this again under Settings > About > Getting started.</string>
+    <string name="welcome_text">1. Plug an RTL-SDR dongle into the phone with a USB-OTG adapter, and connect an antenna.\n\n2. Tap the frequency display to type in a station, for example 101.1.\n\n3. The arrows step through the band. The star saves a favorite.\n\n4. The sound starts in analog FM. On a station with HD Radio it blends to HD automatically after about ten seconds.\n\nYou can read this again under Settings > About > Getting started.</string>
     <string name="welcome_ok">Got it</string>
     <string name="about_welcome">Getting started</string>
     <string name="about_welcome_summary">How to use the radio, in four lines</string>

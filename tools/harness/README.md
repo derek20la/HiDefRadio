@@ -52,13 +52,27 @@ build 6 the blend never started. Two tools for that:
 57 ppm too fast. Run it through `apptest` with `DRIFT=off` to see the old behaviour (every
 alignment measurement accepted, none confirmed, analog for ever), and without to see the fix.
 
-    build/drifttest               # all scenarios, PASS / FAIL (about 5 minutes)
+    build/drifttest               # all scenarios, PASS / FAIL (about 8 minutes)
     build/drifttest 57 120 v      # one run: 57 ppm, 120 s, every measurement printed
     build/drifttest 57 120 none   # ... without the first guess from the tuning error
     build/drifttest 57 120 off    # ... without the correction (must fail)
+    build/drifttest 58 180 wander=12 noise=0.05 v   # a station whose analog and HD audio match only loosely
+    build/drifttest tracker v     # only the tracker, fed with measurements written down by hand
 
 `drifttest` needs no recording and no nrsc5: it feeds `drift.hpp`, `aligner.hpp` and
 `blend.hpp` one made-up program as "HD" and as "analog" with a crystal error of your choice,
 in made-up time (an hour takes half a minute). Its scenarios: 0 to +-150 ppm, a first guess
-that is wrong, none at all, a crystal that warms up, nrsc5 re-timing its output, and an hour
-of listening at 57 and 100 ppm.
+that is wrong, none at all, a crystal that warms up, nrsc5 re-timing its output, lost samples,
+a station whose analog and HD audio are processed differently, and an hour of listening at
+57 and 100 ppm.
+
+The `tracker` tests need no audio either: the tracker (`drift::Tracker`) gets the tuning
+offset and a list of alignment measurements written down by hand. That is how a fault seen
+once in the field becomes a test: the first one is a tester's screen video (a dongle 58 ppm
+fast, two measurements that agree and a third 14 frames off - build 7 answered
+"+103 ppm (measured)"), the second the same thing found on a KKLQ recording.
+
+`apptest`'s status line shows what the tracker decided: `clock 58.2 ppm (guess | measured,
+in use ..., tuning says ..., scatter x1.0)`, plus `NOT USED: audio 103.2` when a measurement
+of the audio was refused, or `NOT USED: tuning -57.0` when the audio proved the tuning
+offset wrong.

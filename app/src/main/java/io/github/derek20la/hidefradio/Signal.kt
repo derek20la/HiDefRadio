@@ -76,6 +76,11 @@ data class Signal(
     // corrects the analog, so the two stay lined up with any dongle.
     val clockState: String,   // "off" (nothing known / demodulator off), "guess" (from the tuning offset), "measured" (from the audio)
     val clockPpm: Float,      // the dongle's clock error, parts per million (> 0 = fast). TCXO dongles: ~1; plain crystals: 30-100
+    // Build 8: the app has two witnesses to the dongle's clock - the tuning offset (there at
+    // once, good to a ppm or two) and the audio (much better, but only after half a minute of
+    // measurements that agree). When they contradict each other, one of them is not used:
+    val clockUnused: String,  // "" (they agree), "audio" (too far from the tuning offset, no strong case), "tuning" (the audio proved it wrong)
+    val clockUnusedPpm: Float,    // what the one that is not used says
     val station: String,      // e.g. "KRTH" ("" = not received yet)
     val slogan: String,
     // M12: RDS / RBDS - the data an ANALOG FM station sends (rds.hpp). All empty while the
@@ -213,6 +218,8 @@ data class Signal(
                 alignJumps = long("alignJumps", 0).toInt(),
                 clockState = str("clockState").ifEmpty { "off" },       // build 6
                 clockPpm = float("clockPpm", 0f),
+                clockUnused = str("clockUnused"),                       // build 8
+                clockUnusedPpm = float("clockUnusedPpm", 0f),
                 station = str("station").trim(),
                 slogan = str("slogan").trim(),
                 rdsSync = bool("rdsSync"),                             // M12
