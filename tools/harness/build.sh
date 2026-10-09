@@ -12,7 +12,7 @@ APP=${APP:-$HERE/../../app/src/main/cpp}
 mkdir -p "$HERE/build" && cd "$HERE/build"
 cp "$APP"/native-lib.cpp "$APP"/*.hpp .
 mkdir -p cfg && cp "$APP/nrsc5-config/config.h" cfg/
-cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
+cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/searchtest.cpp" "$HERE/mkhdgap.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
 [ -d nrsc5 ] || git clone --depth 1 --branch v3.2.0 https://github.com/theori-io/nrsc5.git
 [ -d rtl-sdr-blog ] || git clone --depth 1 https://github.com/rtlsdrblog/rtl-sdr-blog.git
 [ -d faad2 ] || { git clone --depth 1 --branch 2.11.2 https://github.com/knik0/faad2.git; (cd faad2 && patch -p1 < ../nrsc5/support/faad2-hdc-support.patch); }
@@ -29,5 +29,7 @@ clang++ -std=c++17 -O2 -w -I stub -I nrsc5/include -I rtl-sdr-blog/include -I "$
 clang++ -std=c++17 -O2 -w blendtest.cpp -o blendtest
 clang++ -std=c++17 -O2 -w drifttest.cpp -o drifttest
 clang++ -std=c++17 -O2 -w mkdrift.cpp -o mkdrift
-echo 'built build/apptest, build/blendtest, build/drifttest and build/mkdrift. e.g.:'
+clang++ -std=c++17 -O2 -w searchtest.cpp -o searchtest
+clang++ -std=c++17 -O3 -w mkhdgap.cpp -o mkhdgap
+echo 'built build/apptest, build/blendtest, build/drifttest, build/mkdrift, build/searchtest and build/mkhdgap. e.g.:'
 echo '  IQFILE=klos.cu8 IQPACE=1 WAVOUT=out.wav build/apptest 95500000 2 34 4.5:prog:1 22:prog:0'

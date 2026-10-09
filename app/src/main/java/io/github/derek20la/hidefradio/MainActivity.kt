@@ -834,7 +834,9 @@ class MainActivity : AppCompatActivity() {
         val measuring = s.fmQuietDb <= -98f
         val hd = when {
             !s.hdOn -> getString(R.string.signal_hd_off)            // 12a step 3: Analog only
-            !s.everSynced -> "no HD yet"
+            // Build 9: after 30 s without HD the search rests (a look every 30 s) - the
+            // "yet" goes, so you can see the app has stopped expecting HD here.
+            !s.everSynced -> if (s.hdResting) "no HD" else "no HD yet"
             !s.synced -> "HD lost"
             // 11d: the HD1 never lines up with the analog = another station's HD (rare).
             s.blendMismatch -> getString(R.string.signal_hd_mismatch)
@@ -928,11 +930,19 @@ class MainActivity : AppCompatActivity() {
             else -> R.string.overload
         })
         val kbps = if (s.kbps > 0) f("%.1f kbps", s.kbps) else "-"
+        // Build 9: in Auto the HD search rests on a station without HD (hdsearch.hpp):
+        // "no HD found - resting, next look in 21 s", and "looking again…" during a look.
+        val rest = when (s.hdSearch) {
+            "rest" -> " - resting, next look in ${s.hdLookIn} s"
+            "look" -> " - looking again…"
+            else -> ""
+        }
         val state = when {
             s.holding -> "holding (sync lost a moment ago)"
             s.locked -> "synced" + (if (s.mode.isNotEmpty()) ", mode ${s.mode}" else "") +
                         (if (weak != null) " - weak ($weak)" else "")        // M10c step 3
-            s.everSynced -> "lost"
+            s.everSynced -> "lost$rest"
+            s.hdResting -> "no HD found$rest"
             else -> "searching"
         }
         return stationRow(s) + listOf(                                      // 13b
@@ -1023,7 +1033,11 @@ class MainActivity : AppCompatActivity() {
         return listOf("Analog" to "$carrier, offset ${s.fmOffsetHz} Hz\n" +
                                   "$stereo\n" +
                                   "demod ${s.fmLoadPct} % CPU, HD decode " +
-                                  if (s.hdOn) "${s.hdLoadPct} %" else "off")          // 12a step 3
+                                  when {
+                                      !s.hdOn -> "off"                                // 12a step 3
+                                      s.hdSearch == "rest" -> "resting"               // build 9
+                                      else -> "${s.hdLoadPct} %"
+                                  })
     }
 
     /**

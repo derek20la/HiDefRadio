@@ -219,7 +219,16 @@ public:
             for (long long f = from / ENV_FRAMES * ENV_FRAMES; f < hdAnchor_; f += ENV_FRAMES)
                 envH_[(size_t)(f / ENV_FRAMES) % envLen_] = 0.f;
             hdNext_ = hdAnchor_;
-            if (!hdEver_) { hdValidFrom_ = hdAnchor_; hdEver_ = true; }
+            // Only THIS run's audio can be compared with the analog: what came before the
+            // anchor is the gap just filled with zeros, and before that a run that sat
+            // somewhere else on the time line. (Build 9. Until then this was done for the
+            // very first run only, and measure() counted its tries against the zeros as
+            // failures - three of them and the verdict was "no match", seconds before the
+            // new run had enough audio to be measured at all. It rarely mattered, because
+            // a new run was rare. Since hdsearch.hpp rests the HD search, every look after
+            // a rest starts one.)
+            hdValidFrom_ = hdAnchor_;
+            if (!hdEver_) hdEver_ = true;
             else {
                 // Audio is back after an outage: the HD stream is anchored afresh, so the
                 // content offset changes - old results no longer apply. (The real-time

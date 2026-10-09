@@ -17,6 +17,7 @@
 #include "aligner.hpp"     // M11 (11c): measures the analog-vs-HD time offset and loudness
 #include "blend.hpp"       // M11 (11d): the analog <-> HD blend ("HD Radio: Auto")
 #include "drift.hpp"            // build 6: the dongle's clock vs the station's (clock correction)
+#include "hdsearch.hpp"         // build 9: the HD search rests on a station without HD
 
 // nrsc5.h is a C header without C++ guards, so tell the C++ compiler
 // "these are C functions" (otherwise the linker can't find them).
@@ -558,6 +559,31 @@ static bool demodWanted() { return g_audioSource.load() != SOURCE_HD; }
 static bool hdWanted() { return g_mode == NRSC5_MODE_AM || g_audioSource.load() != SOURCE_ANALOG; }
 static std::atomic<bool> g_hdOn{false};      // nrsc5 is being fed (for the screen: "HD off")
 static bool g_hdOpenFailed = false;          // streaming thread only: don't retry a failed open every block
+
+// Build 9: and in AUTO, on a station that turns out to have no HD? nrsc5 would search for
+// ever, at 23-34 % of a core - as much as, or more than, the analog demodulator that makes
+// all the sound there. So after 30 s without sync the search RESTS: nrsc5 gets 3 s of
+// samples out of every 30, until one of those looks finds HD (hdsearch.hpp has the rule
+// and the reasons). While it rests nrsc5 stays open and simply is not fed. Whenever the
+// samples start again after a rest - a look, or the listener switching to Digital only -
+// it is with a FRESH decoder (close + open, a few allocations), for two reasons found
+// with the harness: a decoder that kept its state across the gap synced twice (the first
+// time 20 Hz beside the station's real tuning error; it lost that sync two seconds later
+// and synced again, and the audio came 1.5 s later than with a fresh one), and a decoder
+// that had played audio before the rest went on handing out silent audio pieces from the
+// first sample of the look - seconds of zeros at the head of the new stretch of HD audio,
+// which the aligner then tried to match with the analog. A fresh decoder says nothing
+// until it has real audio, exactly as after a tune - the path every station survey and
+// every blend test went down.
+// Only in Auto on HD1: in Digital only, on AM and on an HD2+ program there is nothing else
+// to hear, so the search runs all the time there, as before.
+static hdsearch::Rest g_hdSearch;                          // streaming thread only (reset before it starts)
+static int g_hdSyncsSeen = 0;                              // streaming thread only: syncs counted at the last block
+static int g_hdRestWas = hdsearch::SEARCHING;              // streaming thread only: for the log
+static bool g_hdFed = true;                                // streaming thread only: nrsc5 got the block before this one
+static std::atomic<int> g_hdRest{hdsearch::SEARCHING};     // for the screen: searching / resting / looking
+static std::atomic<int> g_hdLookInS{0};                    // for the screen: seconds until the next look
+static std::atomic<bool> g_hdRestAllowed{true};            // tests only (setHdRestNative)
 
 // Called from onNrsc5Event (streaming thread): add audio to the ring,
 // but only if it belongs to the selected program (9b). The check happens
@@ -1260,10 +1286,46 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
         g_hdLoad.reset();
         LOGI("HD decoder off (Analog only)");
     }
+    // Build 9: does nrsc5 get this block, or is its search resting (hdsearch.hpp)?
+    // "In sync" = nrsc5 says so now, or it reported a sync since the last block (one that
+    // came and went inside a single block counts too).
+    bool hdSynced;
+    {
+        std::lock_guard<std::mutex> lock(g_statusMutex);
+        hdSynced = g_status.synced || g_status.syncCount != g_hdSyncsSeen;
+        g_hdSyncsSeen = g_status.syncCount;
+    }
+    const bool restApplies = g_nrsc5 != nullptr && g_mode == NRSC5_MODE_FM && g_audioSource.load() == SOURCE_AUTO
+                             && g_program.load() == 0 && g_hdRestAllowed.load();
+    const double blockAtS = (double)g_iqBlockStart / SAMPLE_RATE;      // seconds of samples since the tune
+    const bool feedHd = g_hdSearch.step(blockAtS, restApplies, hdSynced);
+    const int hdRest = g_hdSearch.state();
+    g_hdRest = hdRest;
+    g_hdLookInS = (int)std::ceil(g_hdSearch.lookIn(blockAtS));
+    if (feedHd && !g_hdFed && g_nrsc5 != nullptr) {
+        // The samples start again after a rest: with a fresh decoder (see g_hdSearch above).
+        // What the old one told us stays on the screen - the station's HD name, its
+        // programs, its logo.
+        nrsc5_close(g_nrsc5);
+        g_nrsc5 = nullptr;
+        if (!openHd()) { g_hdOpenFailed = true; g_hdOn = false; }
+    }
+    g_hdFed = feedHd;
+    if (hdRest != g_hdRestWas) {
+        // Into the first rest, and out of resting for good - not every look (one each 30 s).
+        if (hdRest == hdsearch::RESTING && g_hdRestWas == hdsearch::SEARCHING)
+            LOGI("HD search rests: no HD for %.0f s - from now a %.0f s look every %.0f s",
+                 hdsearch::SEARCH_S, hdsearch::LOOK_S, hdsearch::REST_S + hdsearch::LOOK_S);
+        else if (hdRest == hdsearch::SEARCHING)
+            LOGI("HD search back on (%s)", hdSynced ? "a look found HD" : "the setting or the program changed");
+        g_hdRestWas = hdRest;
+    }
     if (g_nrsc5 != nullptr) {
         // 11d: time the HD decode too ("decode N %" next to "demod M %" in the details).
+        // (Build 9: a block nrsc5 does not get counts as no time used, so the figure falls
+        // to 0 % while the search rests.)
         Clock::time_point t0 = Clock::now();
-        nrsc5_pipe_samples_cu8(g_nrsc5, buf, len);
+        if (feedHd) nrsc5_pipe_samples_cu8(g_nrsc5, buf, len);
         double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
         double usedMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
         if (blockMs > 0) g_hdLoad.add(usedMs, blockMs, g_hdLoadPct);   // 9i: 1 s average
@@ -1411,6 +1473,9 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     // opens / closes it later when the setting changes.
     g_hdOpenFailed = false;
     g_hdOn = false;
+    g_hdSearch.reset();                      // build 9: a new station gets its full 30 s of HD search
+    g_hdSyncsSeen = 0; g_hdRestWas = hdsearch::SEARCHING; g_hdFed = true;
+    g_hdRest = hdsearch::SEARCHING; g_hdLookInS = 0;
     if (hdWanted() && !openHd()) return env->NewStringUTF("Stream: nrsc5_open_pipe FAILED");
 
     uint32_t actualRate = rtlsdr_get_sample_rate(g_dev);
@@ -1446,6 +1511,7 @@ static void stopStreaming() {
         LOGI("nrsc5_close()");
     }
     g_hdOn = false;
+    g_hdRest = hdsearch::SEARCHING; g_hdLookInS = 0;      // build 9: nothing rests while nothing plays
 }
 
 // Kotlin (RadioEngine): external fun stopStreamNative()
@@ -1820,6 +1886,12 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
         out += "hdOtherName=" + clean(hdName) + "\n";
     }
     out += std::string("hdOn=") + (g_hdOn.load() ? "1" : "0") + "\n";   // 12a step 3: off in Analog only
+    {   // Build 9: the HD search on a station without HD (hdsearch.hpp): on / rest / look,
+        // and while it rests the seconds until the next look.
+        int rest = g_hdRest.load();
+        out += std::string("hdSearch=") + (rest == hdsearch::RESTING ? "rest" : rest == hdsearch::LOOKING ? "look" : "on") + "\n";
+        out += "hdLookIn=" + std::to_string(g_hdLookInS.load()) + "\n";
+    }
     out += "station=" + clean(st.stationName) + "\n";   // clean(): no new-lines inside a value
     out += "slogan=" + clean(st.slogan);
     return toJString(env, out);                         // station text -> must use toJString
@@ -2134,6 +2206,14 @@ extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setClockCorrectionNative(JNIEnv*, jobject, jboolean on) {
     g_drift.setEnabled(on == JNI_TRUE);
     LOGI("Clock correction: %s", on == JNI_TRUE ? "on" : "OFF (test)");
+}
+
+// Tests only (the desktop harness; the app never calls it): the rest of the HD search on / off.
+// Off = nrsc5 gets every block in Auto whether it finds HD or not, as in every build before 9.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_setHdRestNative(JNIEnv*, jobject, jboolean on) {
+    g_hdRestAllowed = on == JNI_TRUE;
+    LOGI("HD search rest: %s", on == JNI_TRUE ? "on" : "OFF (test)");
 }
 
 // Kotlin (RadioEngine): external fun getAudioDroppedNative(): Long - values dropped because the ring was full

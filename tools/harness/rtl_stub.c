@@ -1,5 +1,7 @@
 // Harness only: a fake RTL-SDR dongle that plays a .cu8 recording ($IQFILE).
 // IQPACE=1 -> in real time (as the phone gets it), else as fast as possible.
+// IQLOOP=1 -> at the end of the file start again from the top, for ever (a ten-second
+// recording becomes ten minutes of listening; the seam is a click, like a retune without one).
 // apptest's IQSTEP mode sets rtl_stub_after_block: it is then called after every block with
 // the recording time played so far, and apptest does all its work there ("virtual time").
 #include <stdio.h>
@@ -49,9 +51,11 @@ int rtlsdr_read_sync(rtlsdr_dev_t *dev, void *buf, int len, int *n_read) {
 int rtlsdr_read_async(rtlsdr_dev_t *dev, rtlsdr_read_async_cb_t cb, void *ctx, uint32_t buf_num, uint32_t buf_len) {
     (void)dev; (void)buf_num; if (buf_len == 0) buf_len = 262144;
     unsigned char *buf = (unsigned char *)malloc(buf_len); FILE *f = file(); int pace = getenv("IQPACE") != NULL;
+    int loop = getenv("IQLOOP") != NULL;
     struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0); double sent = 0; g_cancel = 0;
     while (!g_cancel && f) {
         size_t n = fread(buf, 1, buf_len, f);
+        if (n < buf_len && loop && ftell(f) > (long)buf_len) { rewind(f); n = fread(buf, 1, buf_len, f); }   // IQLOOP: from the top
         if (n < buf_len) break;
         cb(buf, buf_len, ctx);
         sent += buf_len / 2.0 / g_rate;

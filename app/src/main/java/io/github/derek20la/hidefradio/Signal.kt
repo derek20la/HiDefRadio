@@ -102,7 +102,17 @@ data class Signal(
     val hdOtherName: String,  // the HD's own name as sent ("KSOF-FM"), kept until the next tune
     // 12a step 3: the HD decoder runs (off in Analog only - nrsc5 gets no samples then)
     val hdOn: Boolean,
+    // Build 9: the HD search on a station without HD (hdsearch.hpp, Auto only). After 30 s
+    // without HD the search rests and only looks again for 3 s in every 30:
+    //   "on"   = the decoder gets every sample (searching, or decoding the HD)
+    //   "rest" = it gets none          "look" = one of the short looks between two rests
+    val hdSearch: String,
+    val hdLookIn: Int,        // while resting: seconds until the next look
 ) {
+    /** Build 9: the HD search has gone to rest on this station (resting, or taking a look). */
+    val hdResting: Boolean
+        get() = hdSearch == "rest" || hdSearch == "look"
+
     /**
      * M12: a station NAME from RDS, for stations without HD: the call letters, or the PS
      * once it has stood still for a while (LA stations love to scroll song titles through
@@ -236,6 +246,8 @@ data class Signal(
                 hdSameCall = str("hdSameCall").trim(),
                 hdOtherName = str("hdOtherName").trim(),
                 hdOn = bool("hdOn"),                                   // 12a step 3
+                hdSearch = str("hdSearch").ifEmpty { "on" },           // build 9
+                hdLookIn = long("hdLookIn", 0).toInt(),
             )
         }
 

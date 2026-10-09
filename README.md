@@ -31,6 +31,7 @@ No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see com
 - It works with cheap and old dongles too. Their crystals can be 50 parts per million off and more, which lets the analog audio creep away from the HD audio by milliseconds a minute. The app measures the dongle's clock against the station's and corrects for it.
 - HD2 and up have no analog twin and play live.
 - You can also choose **Digital only** or **Analog only**. Analog only switches the HD decoder off, which saves battery.
+- Auto saves battery on stations without HD too. Searching for an HD signal that isn't there is the decoder's most expensive job, so after 30 seconds without HD it rests and only looks again for 3 seconds in every 30. If the station's HD turns up later, the next look finds it.
 
 [How the blend works](#how-the-blend-works) has the details.
 

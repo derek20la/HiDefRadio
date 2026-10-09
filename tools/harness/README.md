@@ -27,16 +27,52 @@ example of driving the engine outside Android.
 - `DRIFT=off` switches the clock correction (`drift.hpp`) off. The output is then bit for bit
   what build 5 played - the proof that the correction changed nothing else.
 - `SIGDUMP=20` prints the app's whole status text once, 20 s in.
+- `IQLOOP=1` plays the recording round and round, so a ten-second file can stand in for ten
+  minutes of listening (the seam is a click, like a retune without one).
+- `HDREST=off` the HD search never rests (`hdsearch.hpp`). The output is then bit for bit
+  what build 8 played.
+- `UNMATCHED=hd` the app's own default for "If the HD signal is another station's": play it
+  anyway. (Not set = stay on the analog, as every test before build 9 ran.)
 - arguments: frequency in Hz, source (`0` Digital only, `1` Analog only, `2` Auto), seconds,
   then optional events `t:prog:N` (switch to program N at t seconds; 0 = HD1) and `t:src:N`.
 
 It prints one status line every 0.25 s (sync, alignment, blend state) plus the app's own log lines.
+The columns `hd on 7% demod 5%` are the two loads the app shows in its signal details: the
+time nrsc5 and the FM demodulator take, in % of real time (`hd rest` / `hd look` = the HD
+search is resting / taking a look). The last line, `COST over ...`, is their average over
+the run and the processor time of the whole harness - the figure to compare before and
+after a change that is meant to save battery.
 
 How it works: `rtl_stub.c` is a fake librtlsdr that "receives" the file, `fftw3.h` is a tiny
 stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI functions with a
 fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are downloaded into `build/`.
 
 `blendtest` (`build/blendtest`) tests `blend.hpp` alone with made-up audio.
+
+## The rest of the HD search: searchtest and mkhdgap
+
+In Auto, a station without HD made nrsc5 search for ever, which costs more than decoding.
+Since build 9 the search rests after 30 s and looks again for 3 s in every 30
+(`hdsearch.hpp` has the rule and the reasons). Two tools for that:
+
+    build/searchtest              # the rule alone, in made-up time: PASS / FAIL (instantly)
+    build/searchtest v            # ... with every change of state printed
+
+    build/mkhdgap kost.cu8 nohd.cu8             # the whole recording without its HD
+    build/mkhdgap kost.cu8 late.cu8 0:45        # the HD only appears after 45 s
+    build/mkhdgap kost.cu8 lost.cu8 4:50        # HD for 4 s, gone, back at 50 s
+    IQFILE=late.cu8 IQSTEP=1 PRINT=1 build/apptest 103500000 2 74
+
+`mkhdgap` takes the HD Radio signal out of a recording for the seconds you name and leaves
+the analog station as it was: the HD carriers sit beside the analog signal (from 129 kHz
+out), so a low-pass filter on the IQ samples removes them. That gives the two things no
+real station does on request: a station that has no HD while its twin with HD is on file
+for comparison, and HD that comes and goes at a known second.
+
+What to look for in `apptest`'s output: `hd rest` from 30 s on, a few lines of `hd look`
+every 30 s, and in the `late` file `SYNC` during the look that follows the 45 s mark, then
+the usual alignment and `blend hd`. Run the same file with `HDREST=off` to see what it
+cost before.
 
 ## The clock correction: mkdrift and drifttest
 

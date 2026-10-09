@@ -5,12 +5,24 @@
 //   GAIN=auto = start with the app's auto-gain (default: a manual 30.0 dB);  DONGLE=V3 = see rtl_stub.c.
 //   IQSTEP=1 = "virtual time": no waiting, the same numbers every run (see below);  PRINT=1 = a status line every second
 //   DRIFT=off = no clock correction (drift.hpp);  SIGDUMP=20 = print the app's whole status text once, at 20 s
+//   HDREST=off = the HD search never rests (hdsearch.hpp) - the engine as it was before build 9
+//   UNMATCHED=hd = the app's default for "If the HD signal is another station's": play it anyway
+//                  (not set = stay on the analog, as every test before build 9 ran)
+//   IQLOOP=1 = play the recording round and round (rtl_stub.c)
 //   events: "t:prog:N" = select program N (0 = HD1) at t seconds;  "t:src:N" = change the audio source
-// Prints one line per 0.25 s with the keys of interest from getSignalNative().
+// Prints one line per 0.25 s with the keys of interest from getSignalNative(), and at the end
+// what the run cost: the two loads the app shows in its signal details (demod, HD decode),
+// averaged over the run, and the processor time of the whole harness per second of radio.
 #include "native-lib.cpp"
 extern "C" { extern void (*rtl_stub_after_block)(double seconds); extern volatile int rtl_stub_eof; }
 #include <map>
 #include <sstream>
+#include <sys/resource.h>      // getrusage: the processor time this program has used
+// Seconds of processor time used so far (all threads).
+static double cpuSeconds() {
+    struct rusage u; getrusage(RUSAGE_SELF, &u);
+    return (double)u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + (double)u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6;
+}
 struct FakeArray { std::vector<int16_t> s; std::vector<int8_t> b; std::vector<int32_t> i; };
 static jstring JNICALL fNewStringUTF(JNIEnv *, const char *t) { return (jstring) new std::string(t); }
 static jstring JNICALL fNewString(JNIEnv *, const jchar *c, jsize n) { auto *s = new std::string; for (jsize k = 0; k < n; k++) s->push_back(c[k] < 128 ? (char)c[k] : '?'); return (jstring)s; }
@@ -38,7 +50,9 @@ int main(int argc, char **argv) {
     for (int a = 4; a < argc; a++) { std::stringstream ss(argv[a]); std::string t, w, n; getline(ss, t, ':'); getline(ss, w, ':'); getline(ss, n, ':'); evs.push_back({ atof(t.c_str()), w, atoi(n.c_str()), false }); }
     fprintf(stderr, "%s\n", str(J(openDongleNative)(&env, nullptr, 3)).c_str());
     J(setAudioSourceNative)(&env, nullptr, src);
-    J(setBlendUnmatchedNative)(&env, nullptr, JNI_FALSE);
+    J(setBlendUnmatchedNative)(&env, nullptr, getenv("UNMATCHED") && strcmp(getenv("UNMATCHED"), "hd") == 0 ? JNI_TRUE : JNI_FALSE);
+    // HDREST=off: the HD search never rests (hdsearch.hpp) - the engine as it was before build 9.
+    if (getenv("HDREST") && strcmp(getenv("HDREST"), "off") == 0) J(setHdRestNative)(&env, nullptr, JNI_FALSE);
     J(setStereoModeNative)(&env, nullptr, 0);
     // DRIFT=off: no clock correction (drift.hpp) - the engine as it was before build 6.
     if (getenv("DRIFT") && strcmp(getenv("DRIFT"), "off") == 0) J(setClockCorrectionNative)(&env, nullptr, JNI_FALSE);
@@ -64,6 +78,10 @@ int main(int argc, char **argv) {
     static JNIEnv *E; E = &env;
     static std::vector<Ev> *events; events = &evs;
     static double nextAlign = 2.0, nextPrint, printEvery;
+    // What the run cost. The engine publishes its two loads once a second (demod = the FM
+    // demodulator, hd = nrsc5, each in % of real time); every tick adds the latest figures.
+    static double loadTicks = 0, loadFm = 0, loadHd = 0, restTicks = 0, lastT = 0;
+    static const double cpuAtStart = cpuSeconds();
     printEvery = getenv("PRINT") ? atof(getenv("PRINT")) : 0.25;
     nextPrint = printEvery;
     // One "moment" of the app's life at time t (seconds): the user's actions, Kotlin's alignment
@@ -75,6 +93,8 @@ int main(int argc, char **argv) {
             printf("%7.2f  >>> %s %d\n", t, e.what.c_str(), e.n);
         }
         if (t >= nextAlign) { nextAlign += 2.0; J(measureAlignmentNative)(E, nullptr); }   // Kotlin's alignWatcher
+        loadTicks += 1; loadFm += g_fmLoadPct.load(); loadHd += g_hdLoadPct.load(); lastT = t;
+        if (g_hdRest.load() == hdsearch::RESTING) restTicks += 1;
         if (t >= nextPrint) {
             nextPrint += printEvery;
             std::string sig = str(J(getSignalNative)(E, nullptr));
@@ -82,8 +102,9 @@ int main(int argc, char **argv) {
             if (getenv("SIGDUMP") && !dumped && t >= atof(getenv("SIGDUMP"))) { dumped = true; printf("---- getSignalNative at %.2f s ----\n%s----\n", t, sig.c_str()); }
             std::map<std::string, std::string> kv; std::stringstream ss(sig); std::string line;
             while (getline(ss, line)) { size_t eq = line.find('='); if (eq != std::string::npos) kv[line.substr(0, eq)] = line.substr(eq + 1); }
-            printf("%7.2f  prog %d  synced %s  align %-9s %7s ms %s fr r %s n=%s/%s  blend %-8s toHd %s toAnalog %s  '%s'  clock %s ppm (%s, in use %s, err %s fr, tuning says %s%s%s%s, scatter x%s) carrier %s Hz  rds %s '%s' same %s '%s'\n", t, (int)J(getProgramNative)(E, nullptr),
-                   kv["synced"].c_str(), kv["alignState"].c_str(), kv["alignMs"].c_str(), kv["alignFrames"].c_str(), kv["alignCorr"].c_str(), kv["alignCount"].c_str(), kv["alignTries"].c_str(),
+            printf("%7.2f  prog %d  synced %s  hd %-4s %2s%% demod %2s%%  align %-9s %7s ms %s fr r %s n=%s/%s  blend %-8s toHd %s toAnalog %s  '%s'  clock %s ppm (%s, in use %s, err %s fr, tuning says %s%s%s%s, scatter x%s) carrier %s Hz  rds %s '%s' same %s '%s'\n", t, (int)J(getProgramNative)(E, nullptr),
+                   kv["synced"].c_str(), kv["hdSearch"].c_str(), kv["hdLoadPct"].c_str(), kv["fmLoadPct"].c_str(),
+                   kv["alignState"].c_str(), kv["alignMs"].c_str(), kv["alignFrames"].c_str(), kv["alignCorr"].c_str(), kv["alignCount"].c_str(), kv["alignTries"].c_str(),
                    kv["blendState"].c_str(), kv["blendToHd"].c_str(), kv["blendToAnalog"].c_str(), kv["blendReason"].c_str(),
                    kv["clockPpm"].c_str(), kv["clockState"].c_str(), kv["clockUsePpm"].c_str(), kv["clockErr"].c_str(), kv["clockGuessPpm"].c_str(),
                    kv["clockUnused"].empty() ? "" : "; NOT USED: ", kv["clockUnused"].c_str(), kv["clockUnused"].empty() ? "" : (" " + kv["clockUnusedPpm"]).c_str(),
@@ -131,6 +152,13 @@ int main(int argc, char **argv) {
     }
     J(stopStreamNative)(&env, nullptr);
     J(closeDongleNative)(&env, nullptr);
+    // What it cost. "whole harness" = everything this program did (nrsc5, the demodulator,
+    // the aligner, the blend, this status text), in % of one core of THIS computer.
+    if (loadTicks > 0 && lastT > 0)
+        printf("COST over %.1f s: demod %.1f %%, HD decode %.1f %% of real time (as in the app's signal details); "
+               "HD search resting %.0f %% of the time; whole harness %.1f %% of one core\n",
+               lastT, loadFm / loadTicks, loadHd / loadTicks, 100.0 * restTicks / loadTicks,
+               100.0 * (cpuSeconds() - cpuAtStart) / lastT);
     if (wav) { header(); fclose(wav); }
     return 0;
 }
