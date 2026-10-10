@@ -130,6 +130,10 @@ struct Result {
     float gainDb = 0;             // analog loudness relative to HD (dB, > 0 = analog louder)
     float dMs = 0;                // offset in real time, ms (block uncertainty removed)
     bool  usedHint = false;       // searched only around the remembered value
+    float hdCover = 0;            // build 10: how much of the HD stretch that was searched held real audio
+                                  // (0 ... 1; the rest was missing or zero-filled by nrsc5). A failed
+                                  // attempt only says "these are two different programmes" when the HD
+                                  // was really there - stationid.hpp looks at this before it believes one.
 };
 
 struct Status {
@@ -298,6 +302,7 @@ public:
         std::vector<float> tmpl, region, envA, envH;
         long long a0, s0, corr;
         bool usedHint = false;
+        float cover = 0;                                    // build 10: see Result::hdCover
         {
             std::lock_guard<std::mutex> lock(m_);
             const long long La = (long long)(TEMPLATE_SECONDS * FRAME_RATE);
@@ -327,19 +332,25 @@ public:
             for (size_t i = 0; i < region.size(); i++) region[i] = histH_[(size_t)(s0 / DECIM + i) % histLen_];
             envA = envA_; envH = envH_;
             corr = anchorCorrection();
+            // Build 10: how much of the HD stretch [v0, v1) is real audio? (10 ms pieces whose
+            // energy is exactly zero are ones nrsc5 filled in, or that never came.)
+            long long bins = 0, live = 0;
+            for (long long f = v0 / ENV_FRAMES * ENV_FRAMES; f + ENV_FRAMES <= v1; f += ENV_FRAMES, bins++)
+                if (envH_[(size_t)(f / ENV_FRAMES) % envLen_] > 0.f) live++;
+            cover = bins > 0 ? (float)live / (float)bins : 0.f;
         }
         // ---- 1. coarse: 2,756 Hz, FFT cross-correlation, normalised ----
         std::vector<float> ct = decimate(tmpl, COARSE_DECIM), cr = decimate(region, COARSE_DECIM);
         float rCoarse = 0; long long kCoarse = 0;
         if (!bestLag(ct, cr, 0, (long long)cr.size() - (long long)ct.size(), rCoarse, kCoarse, true))
-            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f);
+            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f, cover);
         // ---- 2. fine: 11,025 Hz, direct, +-6 coarse steps around the peak ----
         long long kMid = kCoarse * COARSE_DECIM, span = 6 * COARSE_DECIM;
         long long kMax = (long long)region.size() - (long long)tmpl.size();
         long long kLo = std::max(0LL, kMid - span), kHi = std::min(kMax, kMid + span);
         float rFine = 0; long long kFine = 0;
         if (!bestLag(tmpl, region, kLo, kHi, rFine, kFine, false))
-            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f);
+            return finish(out, 0, 0.0, a0, 0.f, corr, false, usedHint, 0.f, cover);
         // Parabola through the three points around the peak -> fraction of a sample.
         double frac = 0;
         if (kFine > kLo && kFine < kHi) {
@@ -364,7 +375,7 @@ public:
             eh += h;
         }
         float gainDb = (ea > 0 && eh > 0) ? (float)(10.0 * std::log10(ea / eh)) : 0.f;
-        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, rFine >= ACCEPT_CORR, usedHint, gainDb);
+        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, rFine >= ACCEPT_CORR, usedHint, gainDb, cover);
     }
 
 private:
@@ -378,7 +389,7 @@ private:
     }
 
     bool finish(Result &out, long long offsetFrames, double offsetFine, long long a0, float r, long long corr,
-                bool accepted, bool usedHint, float gainDb) {
+                bool accepted, bool usedHint, float gainDb, float cover) {
         std::lock_guard<std::mutex> lock(m_);
         status_.attempts++;
         out = Result();
@@ -387,6 +398,7 @@ private:
         out.at = a0 + (long long)(TEMPLATE_SECONDS * FRAME_RATE) / 2;
         out.dMs = (float)((offsetFrames - corr) * 1000.0 / FRAME_RATE);
         out.usedHint = usedHint;
+        out.hdCover = cover;
         if (accepted) {
             status_.accepted++;
             status_.corr = r;

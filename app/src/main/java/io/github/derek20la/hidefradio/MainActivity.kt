@@ -642,13 +642,17 @@ class MainActivity : AppCompatActivity() {
         // M12 step 2: hearing the analog while the HD here is ANOTHER station's -> that
         // station's logo and album art would be the wrong pictures: none.
         val otherAnalog = service != null && shownSignal.otherHd && shownSignal.analog
-        val key = "${service?.pictureGen()}/$program/$freqHz/$otherAnalog"
+        // Build 10: and the logo SAVED for this frequency only while nothing says it is
+        // another station's (LogoCache.fits): 91X's analog played under KDSC's saved logo.
+        val savedFits = service == null ||
+            LogoCache.fits(this, freqHz, shownSignal.station, shownSignal.analog, shownSignal.rdsPi)
+        val key = "${service?.pictureGen()}/$program/$freqHz/$otherAnalog/$savedFits/${LogoCache.version}"
         if (key == shownPicturesKey) return
         shownPicturesKey = key
 
         val art = if (otherAnalog) null else service?.art(program)?.let { decode(it) }
         val logo = if (otherAnalog) null else
-            (service?.logo(program) ?: LogoCache.load(this, freqHz, program))?.let { decode(it) }
+            (service?.logo(program) ?: (if (savedFits) LogoCache.load(this, freqHz, program) else null))?.let { decode(it) }
 
         val big = art ?: logo
         binding.nowImage.setImageBitmap(big)
@@ -781,6 +785,10 @@ class MainActivity : AppCompatActivity() {
             s.auto && s.blendState == "toHd" -> R.color.signal_good to getString(R.string.signal_blending_hd)
             s.auto && s.blendState == "toAnalog" -> R.color.signal_holding to
                 getString(R.string.signal_blending_analog) + "  (${s.blendReason})"
+            // Build 10: the HD stands alone (the analog here is another station's) and has
+            // dropped out: silence, like a sub-channel - say so, or it looks like a fault.
+            s.auto && s.blendAlone && s.blendSilent -> R.color.signal_lost to
+                getString(R.string.signal_silent, s.blendSilentSecs)
             // M11: analog - the dot shows the FM carrier; the HD state follows in brackets.
             // (11d: also Auto while it plays the analog.)
             s.analog -> analogLine(s)
@@ -1003,6 +1011,15 @@ class MainActivity : AppCompatActivity() {
             val st = Stations.elsewhere(this, freqHz, name) ?: continue
             return listOf("Station" to "${st.call} · ${st.place}\nlicensed on ${FmBand.bandText(st.freqHz)} - relayed here")
         }
+        // Build 10: a call that ONLY the US formula gives - not licensed on this frequency, not
+        // named in the station's own text. Said as what it is: XHITZ-FM Tijuana (90.3) sends
+        // 692B, which spells "WHTZ" - a station in New Jersey. Never the title, never "relayed".
+        if (s.rdsCallMaybe.isNotEmpty()) {
+            val st = Stations.elsewhere(this, freqHz, s.rdsCallMaybe)
+            val where = if (st != null) "which is licensed on ${FmBand.bandText(st.freqHz)} (${st.place})"
+                        else "which is not in the station list"
+            return listOf("Station" to "unconfirmed: the RDS code spells ${s.rdsCallMaybe},\n$where")
+        }
         return emptyList()
     }
 
@@ -1072,6 +1089,9 @@ class MainActivity : AppCompatActivity() {
         if (!s.auto) return emptyList()
         val what = when (s.blendState) {
             "sub" -> "sub-channel plays live (no analog to blend with)"
+            // Build 10: the analog here is another station's - the HD is on its own.
+            "alone" -> if (s.blendSilent) "waiting for the HD (silence) ${s.blendSilentSecs} s"
+                       else "HD alone for ${s.blendSinceSecs} s - the analog here is another station (silence in dropouts)"
             "hd" -> "HD" + (if (s.blendAligned) "" else " (unaligned)") + " for ${s.blendSinceSecs} s"
             "toHd" -> "fading to HD"
             "toAnalog" -> "fading to analog"
@@ -1079,7 +1099,8 @@ class MainActivity : AppCompatActivity() {
         }
         val level = if (s.blendMatchDb != 0f) String.format(Locale.US, ", analog %+.1f dB", s.blendMatchDb) else ""
         val history = if (s.blendToHd == 0) "" else
-            "\nto HD ${s.blendToHd}×, to analog ${s.blendToAnalog}×, HD ${s.blendHdSecs} s in all" +
+            "\nto HD ${s.blendToHd}×, to analog ${s.blendToAnalog}×" +
+            (if (s.blendSilences > 0) ", to silence ${s.blendSilences}×" else "") + ", HD ${s.blendHdSecs} s in all" +
             (if (s.blendReason.isNotEmpty()) ", last: ${s.blendReason}" else "")
         return listOf("Blend" to what + level + history)
     }
@@ -1116,9 +1137,20 @@ class MainActivity : AppCompatActivity() {
         }
         // M12 step 2: RDS against the HD's call sign.
         val call = s.hdSameCall.ifEmpty { "PI ${s.rdsPi}".takeIf { s.rdsPi.isNotEmpty() } ?: "RDS" }
-        val same = when (s.hdSame) {
-            Signal.HD_SAME_YES -> "\nsame station (RDS $call = HD ${s.station})"
-            Signal.HD_SAME_NO -> when (s.alignState) {
+        // Build 10: an RDS code that is not the HD station's own is (or was, in the last minute)
+        // coming in: suspected -> the audio is being checked; confirmed -> two stations here.
+        val hdName = s.hdOtherName.ifEmpty { s.station }.ifEmpty { "the HD station" }
+        val ownCode = if (s.hdOwnPi.isNotEmpty()) " (${s.hdOwnPi})" else ""
+        val foreignCode = s.rdsPi.takeIf { it.isNotEmpty() && !it.equals(s.hdOwnPi, ignoreCase = true) }
+        val same = when {
+            s.hdContest == Signal.HD_CONTEST_CONFIRMED ->
+                "\nthe analog here is " + s.hdSameCall.ifEmpty { "another station" } +
+                (if (foreignCode != null) " (RDS code $foreignCode)" else "") + " - not $hdName$ownCode"
+            s.hdContest == Signal.HD_CONTEST_SUSPECTED && s.hdSame != Signal.HD_SAME_NO ->
+                (if (foreignCode != null) "\nRDS code $foreignCode is not $hdName's$ownCode" else "\nanother RDS code than $hdName's$ownCode was received") +
+                " - checking the audio…"
+            s.hdSame == Signal.HD_SAME_YES -> "\nsame station (RDS $call = HD ${s.station})"
+            s.hdSame == Signal.HD_SAME_NO -> when (s.alignState) {
                 "ok" -> "\nRDS says $call, HD says ${s.hdOtherName} - but the audio matches"
                 "nomatch" -> "\nHD = ${s.hdOtherName}, another station than $call (RDS)"
                 else -> "\nRDS says $call, HD says ${s.hdOtherName} - checking the audio…"   // 12a step 4

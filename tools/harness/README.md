@@ -112,3 +112,44 @@ fast, two measurements that agree and a third 14 frames off - build 7 answered
 in use ..., tuning says ..., scatter x1.0)`, plus `NOT USED: audio 103.2` when a measurement
 of the audio was refused, or `NOT USED: tuning -57.0` when the audio proved the tuning
 offset wrong.
+
+## Two stations on one frequency: identtest, mkcochannel and calls.sh
+
+A frequency is not a station. With a distant station coming in over a local one, the HD can
+be one station's and the analog heard another's - and then nothing the app says or plays may
+treat the two as one (`stationid.hpp` has the rules and the three sightings behind them;
+`blend.hpp`, "the HD plays alone"). Three tools:
+
+    build/identtest               # stationid.hpp alone against the app's real station list: PASS / FAIL
+    sh calls.sh 99.1              # the calls the list has on 99.1, as the app hands them to the engine
+    build/mkcochannel kost.cu8 xetra.cu8 two.cu8 74 36:43
+    CALLS="$(sh calls.sh 103.5)" UNMATCHED=hd IQFILE=two.cu8 IQSTEP=1 PRINT=1 build/apptest 103500000 2 74
+
+`identtest` needs no recording. It feeds the judge what the engine would - the calls licensed
+on the frequency, the HD's name, the RDS decoder's status, which station's RDS blocks came in
+lately, the aligner's attempts - for the cases that were met on the air: XHITZ-FM's code
+that spells "WHTZ", KDSC's HD under XETRA-FM's analog (first meeting, the evening's sequence,
+and with the owner remembered), a station that changed its code, KGGI's wrong code with a
+weak HD (the false "another station" of 2026-10-02 must never come back), KTWV's HD that
+names itself "WAVE", KHHT / KSOF, and ordinary stations where nothing may happen.
+
+`mkcochannel` makes the recording nobody can make on demand: the HD carriers of one recording
+with the analog of another on top, the two analogs trading places (`36:43` = from 36 s to
+43 s the HD station's own analog is the stronger one; everywhere else the other station wins,
+as an FM receiver only hears the stronger of two). A recording of a station whose level moves
+(an antenna that was touched) makes the two flip by themselves - that is realistic. Combine
+it with `mkhdgap` to take the HD away for a while (`mkhdgap two.cu8 gap.cu8 20:34`: more than
+ten seconds of silence, so the safety net gives the other station's analog back).
+
+`OWNER="KOST 36DF"` hands the engine the owner a saved logo's file name would carry (the HD
+station's name and its own RDS code; `OWNER=KOST` = the code is not known).
+
+`apptest`'s status line ends with `rds F000 '' same 2 '' contest 2 own 36DF`: the RDS code and
+the call that may be shown (`maybe WHTZ` = a call only the formula gives), the same-station
+verdict (0 can't tell, 1 yes, 2 no) with the analog station's name, the contest (0 none,
+1 suspected, 2 confirmed) and the HD station's own code; `blend alone` = the HD plays alone,
+`SILENT 3 s` = it has dropped out and the silence is waiting for it.
+
+`blendtest` has the blend's side of it with made-up audio: the HD alone, silence in a
+dropout and never a frame of the other station, the safety net after 10 s, "stay on analog",
+and the way back to the ordinary aligned blend.

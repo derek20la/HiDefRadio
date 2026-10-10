@@ -62,6 +62,11 @@ data class Signal(
     val blendSinceSecs: Int,  // seconds since the current HD stretch began (0 while on analog)
     val blendMatchDb: Float,  // level correction applied to the analog, dB (negative = turned down)
     val blendReason: String,  // why the last fade happened, e.g. "HD is good", "dropout ahead"
+    // Build 10: blendState "alone" = the analog on this frequency is ANOTHER station's, so the
+    // HD stands alone like a sub-channel: it plays, or - in a dropout - there is silence.
+    val blendSilent: Boolean,     // ... the silence is waiting for the HD right now
+    val blendSilentSecs: Int,     // ... for this long (after 10 s the other station's analog is given back)
+    val blendSilences: Int,       // fades to silence since tuning
     // 11c: analog <-> HD1 alignment (aligner.hpp). Measured from ~8 s after tuning, then every 5 s.
     val alignState: String,   // "waiting" (no HD audio yet), "measuring", "ok" (two results agree), "nomatch"
     val alignMs: Float,       // how far the analog lags HD1, real time, ms (> 0 = HD is ahead)
@@ -88,7 +93,10 @@ data class Signal(
     val rdsSync: Boolean,     // the decoder is locked to the data
     val rdsBler: Int,         // % of data blocks with errors in the last ~1.5 s (0 = perfect, 100 = nothing)
     val rdsPi: String,        // the station's PI code, 4 hex digits ("" = not confirmed yet)
-    val rdsCall: String,      // call letters worked out from the PI (North America; "" = can't tell)
+    val rdsCall: String,      // call letters fit to be shown as the station's name (North America; "" = can't tell):
+                              // licensed on this frequency, or named in the station's own text
+    val rdsCallMaybe: String, // build 10: what the US formula makes of the code when nobody vouches for it
+                              // ("WHTZ" for XHITZ-FM's 692B) - a note for the details, never a name
     val rdsPs: String,        // the 8-character name - or scrolling text, 8 characters at a time
     val rdsPsSecs: Int,       // how long the PS has stayed the same (a real name stands still)
     val rdsRt: String,        // RadioText (up to 64 characters)
@@ -100,6 +108,10 @@ data class Signal(
     val hdSame: Int,          // HD_SAME_UNKNOWN / HD_SAME_YES / HD_SAME_NO
     val hdSameCall: String,   // the ANALOG station's call letters ("" = can't tell)
     val hdOtherName: String,  // the HD's own name as sent ("KSOF-FM"), kept until the next tune
+    // Build 10 (stationid.hpp): two stations on one frequency - KDSC's HD and XETRA-FM's
+    // analog on 91.1, 2026-10-09.
+    val hdOwnPi: String,      // the HD station's OWN RDS code, 4 hex digits ("" = not known) - saved logos are filed under it
+    val hdContest: Int,       // is another station's analog on this frequency right now? HD_CONTEST_NONE / SUSPECTED / CONFIRMED
     // 12a step 3: the HD decoder runs (off in Analog only - nrsc5 gets no samples then)
     val hdOn: Boolean,
     // Build 9: the HD search on a station without HD (hdsearch.hpp, Auto only). After 30 s
@@ -136,7 +148,11 @@ data class Signal(
      * (12a step 3: also while the HD is off.)
      */
     val otherHd: Boolean
-        get() = hdSame == HD_SAME_NO && alignState == "nomatch"
+        get() = hdSame == HD_SAME_NO && (alignState == "nomatch" || hdContest == HD_CONTEST_CONFIRMED)
+
+    /** Build 10: the HD stands alone (the analog here is another station's): it plays, or the silence waits. */
+    val blendAlone: Boolean
+        get() = blendState == "alone"
 
     /** Synced a moment ago, lost it, and still inside the grace period. */
     val holding: Boolean
@@ -153,6 +169,13 @@ data class Signal(
         const val HD_SAME_UNKNOWN = 0
         const val HD_SAME_YES = 1
         const val HD_SAME_NO = 2
+
+        // Build 10: hdContest values (= ident::CONTEST_* in stationid.hpp). "Suspected" = a
+        // code that is not the HD station's is coming in, and the audio is being checked;
+        // only "confirmed" changes what is shown and heard.
+        const val HD_CONTEST_NONE = 0
+        const val HD_CONTEST_SUSPECTED = 1
+        const val HD_CONTEST_CONFIRMED = 2
 
         /** Turns RadioEngine.getSignalNative()'s text into a Signal. */
         fun parse(text: String): Signal {
@@ -218,6 +241,9 @@ data class Signal(
                 blendSinceSecs = long("blendSinceSecs", 0).toInt(),
                 blendMatchDb = float("blendMatchDb", 0f),
                 blendReason = str("blendReason"),
+                blendSilent = bool("blendSilent"),                     // build 10
+                blendSilentSecs = long("blendSilentSecs", 0).toInt(),
+                blendSilences = long("blendSilences", 0).toInt(),
                 alignState = str("alignState").ifEmpty { "waiting" },   // 11c
                 alignMs = float("alignMs", 0f),
                 alignFrames = long("alignFrames", 0),
@@ -236,6 +262,7 @@ data class Signal(
                 rdsBler = long("rdsBler", 100).toInt(),
                 rdsPi = str("rdsPi").trim(),
                 rdsCall = str("rdsCall").trim(),
+                rdsCallMaybe = str("rdsCallMaybe").trim(),             // build 10
                 rdsPs = str("rdsPs").trim(),
                 rdsPsSecs = long("rdsPsSecs", 0).toInt(),
                 rdsRt = str("rdsRt").trim(),
@@ -245,6 +272,8 @@ data class Signal(
                 hdSame = long("hdSame", 0).toInt(),                    // M12 step 2
                 hdSameCall = str("hdSameCall").trim(),
                 hdOtherName = str("hdOtherName").trim(),
+                hdOwnPi = str("hdOwnPi").trim(),                       // build 10
+                hdContest = long("hdContest", 0).toInt(),
                 hdOn = bool("hdOn"),                                   // 12a step 3
                 hdSearch = str("hdSearch").ifEmpty { "on" },           // build 9
                 hdLookIn = long("hdLookIn", 0).toInt(),

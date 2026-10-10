@@ -146,18 +146,21 @@ One stream of samples from the dongle feeds both decoders. That does not put the
 5. **Crossfade.** Once a match is confirmed and the next two seconds of HD are clean, `blend.hpp` crossfades over half a second. The two streams are lined up to within one audio sample, so there is no echo and no skip.
 6. **Look ahead.** Because the HD audio is 2.5 seconds early, a dropout or sync loss is seen before it would be heard. The blend fades to analog ahead of the gap and comes back when the HD is clean again. If the HD keeps dropping, it waits a little longer each time before going back.
 7. **When the audio never lines up.** Then the HD signal on that frequency may belong to another station than the analog one, which happens with distant stations. A setting decides whether to play that HD anyway or stay on the analog. One exception: if the call letters from RDS and from the HD signal are the same, it is the same station with its two sides processed very differently, and the HD is played.
+8. **When two stations share the frequency.** A frequency is not a station: with a distant station coming in over a local one, the HD can be one station's and the analog heard another's (KDSC's HD and the analog of XETRA-FM, "91X", on 91.1 west of Los Angeles). Falling back on "the analog" in every HD dropout would then swap between two programmes. `stationid.hpp` keeps the evidence apart from the conclusion: which RDS code is the HD station's own (its call letters, or the audio matching closely while that code was on the air, or the code remembered with its saved logo), and whether a different code is coming in right now. Only when the audio agrees - three alignment attempts that find no likeness although the HD audio was there - or when the station's own code was proven during the same tune, does it say "another station". From then on `blend.hpp` plays the HD alone, like a sub-channel: silence in a dropout, never the other station, with a line on the screen that offers the other one. A call sign that only the US call-letter formula produces is never shown as a station's name (XHITZ-FM Tijuana sends the code 692B, which spells "WHTZ", a station in New Jersey).
 
 FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono below 24 dB and a gradual change in between, modelled on what car-radio tuner chips do. One finding from this project: on the RTL-SDR the noise after the FM discriminator measured almost flat from 16 to 100 kHz, where textbooks show it rising with frequency. Stereo therefore costs only about 5 dB of extra hiss, where the classic figure is around 20 dB.
 
 ### Where things are
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the dongle, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
-- Next to it are five self-contained C++17 headers with no Android code in them:
+- Next to it are seven self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter).
   - `rds.hpp`: the RDS / RBDS decoder. It needs nothing but the FM multiplex signal.
   - `drift.hpp`: the clock correction. A small resampler, and the tracker that works out the dongle's clock error.
   - `aligner.hpp`: measures the analog-vs-HD time offset and loudness difference.
   - `blend.hpp`: the delay line, the look-ahead and the crossfade.
+  - `hdsearch.hpp`: rests the HD search on a station without HD.
+  - `stationid.hpp`: whose station is this? Call letters, RDS codes and the audio as evidence for "the same station" or "two stations on one frequency".
 
   Feel free to lift them for your own nrsc5 project.
 - `app/src/main/java/io/github/derek20la/hidefradio/` is the Kotlin side:

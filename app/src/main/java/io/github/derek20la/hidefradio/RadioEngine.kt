@@ -162,6 +162,16 @@ object RadioEngine {
     external fun setChannelCallsNative(calls: String, known: Boolean)
 
     /**
+     * Build 10: what the app remembers about the HD station on the frequency about to be
+     * tuned - the owner written into its saved logo's file name (LogoCache.owner): the HD
+     * station's name as stored ("KDSC") and its own RDS code (0x19C2; -1 = not known).
+     * "" and -1 = nothing remembered. With it the native code knows from the first second
+     * that a different RDS code on this frequency is ANOTHER station's analog (91X on
+     * KDSC's 91.1). Call it BEFORE startStreamNative, like setChannelCallsNative. Any thread.
+     */
+    external fun setHdOwnerNative(name: String, pi: Int)
+
+    /**
      * 11c: one alignment measurement (analog vs HD1 time offset and loudness)
      * if it's time and there is enough audio - see aligner.hpp. Takes 10-40 ms
      * -> engine thread only. Returns 0 = nothing measured, 1 = a result was

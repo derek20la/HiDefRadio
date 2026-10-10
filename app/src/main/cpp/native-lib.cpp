@@ -18,6 +18,7 @@
 #include "blend.hpp"       // M11 (11d): the analog <-> HD blend ("HD Radio: Auto")
 #include "drift.hpp"            // build 6: the dongle's clock vs the station's (clock correction)
 #include "hdsearch.hpp"         // build 9: the HD search rests on a station without HD
+#include "stationid.hpp"        // build 10: whose station is this? (RDS codes, call letters, the audio)
 
 // nrsc5.h is a C header without C++ guards, so tell the C++ compiler
 // "these are C functions" (otherwise the linker can't find them).
@@ -313,25 +314,24 @@ static std::atomic<float> g_fmStereo{0.0f};
 static std::mutex g_rdsMutex;
 static rds::Status g_rds;
 static uint32_t g_rdsSerial = 0;                          // streaming thread only: the decoder's change counter last copied
-// M12 step 2: "is the HD the same station as the analog?" - the RDS PI against the HD's
-// call sign (SIS). g_hdCall and g_sameCall are under g_rdsMutex; g_sameStation is
-// blend::SAME_UNKNOWN / SAME_YES / SAME_NO, kept until the next tune (so it survives the
-// demodulator being switched off, e.g. "tap to listen" to the other station's HD).
+// M12 step 2 / build 10: "is the HD the same station as the analog?" - worked out by
+// stationid.hpp (g_ident) from the analog's RDS code, the HD's name (SIS), the FCC list of
+// calls licensed on this frequency, and the aligner's attempts. g_ident, g_hdCall and
+// g_sameCall are under g_rdsMutex. The answers that other code needs without the lock:
+//   g_sameStation  blend::SAME_UNKNOWN / SAME_YES / SAME_NO (kept while the demodulator is
+//                  off, e.g. "tap to listen" to the other station's HD)
+//   g_contest      ident::CONTEST_NONE / SUSPECTED / CONFIRMED - is another station's analog
+//                  on this frequency right now?
+//   g_foreign      ... and it is settled: the blend plays the HD alone (blend.hpp)
+// 13b: Kotlin (Stations.kt) hands over the calls licensed on the frequency before every
+// tune (setChannelCallsNative); build 10: and the owner stored with that frequency's saved
+// logo (setHdOwnerNative) - the judge keeps both.
 static std::string g_hdCall;                              // the HD station's name as sent ("KSOF-FM")
-static std::string g_sameCall;                            // the ANALOG station's call letters, when known
+static std::string g_sameCall;                            // the ANALOG station's name for the screen, when known
 static std::atomic<int> g_sameStation{blend::SAME_UNKNOWN};
-// 13b: the FCC station list. Kotlin (Stations.kt) reads the list built into the app and,
-// before every tune, hands over the call letters licensed on that frequency
-// (setChannelCallsNative): "KHYL", "KWYE", "KRTH"... - letters only, no "-FM". Two uses:
-//  - a "1xxx" RDS code (rds.hpp: iHeart & co. replace the first digit of the PI by 1, which
-//    leaves nine possible calls): normally only ONE of the nine is licensed on this
-//    frequency -> that is the station (tableCall);
-//  - an HD station name counts as "another station's call sign" only if somebody with
-//    that call IS licensed here (KTWV's HD calls itself "WAVE" - a name, not a call).
-// Both under g_rdsMutex. g_channelKnown = false: no list for this frequency (AM, another
-// region) -> the rules from before the list apply.
-static std::vector<std::string> g_channelCalls;
-static bool g_channelKnown = false;
+static ident::Judge g_ident;
+static std::atomic<int> g_contest{ident::CONTEST_NONE};
+static std::atomic<bool> g_foreign{false};
 
 static std::atomic<int> g_fmLoadPct{0};                   // demodulator CPU time, % of real time
 static std::atomic<int> g_hdLoadPct{0};                   // 11d: nrsc5's own decode time, % of real time (for comparison)
@@ -398,151 +398,32 @@ static long long timelineFrame(long long iqSamples) {
 // has its own lock (a leaf, like the aligner's) and its own wake-up.
 static blend::Blender g_blend;
 
-// ---- M12 step 2: "is the HD the same station as the analog?" (globals above, with RDS) ----
-// The call letters in an HD station name. Stations send "KKLQ", "KGB-FM", but also
-// "101.5 KGB" (seen 09-30), so look at each word: the first one that is K/W + 2-3 letters
-// (a "-FM" / "-HD1" ending dropped) counts. exact = the whole name is just the call (+ ending).
-// "" when there is none - Mexican XH..., "MPS", an empty name: can't be judged.
-static std::string usCall(const std::string &name, bool *exact = nullptr) {
-    std::vector<std::string> words;
-    std::string w;
-    for (char ch : name + " ") {
-        if (ch == ' ' || ch == '/' || ch == ',') { if (!w.empty()) words.push_back(w); w.clear(); }
-        else w += (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
-    }
-    for (const std::string &word : words) {
-        std::string c = word.substr(0, word.find('-'));
-        if (c.size() < 3 || c.size() > 4 || (c[0] != 'K' && c[0] != 'W')) continue;
-        bool letters = true;
-        for (char ch : c) if (ch < 'A' || ch > 'Z') letters = false;
-        if (!letters) continue;
-        if (exact) *exact = words.size() == 1;
-        return c;
-    }
-    return "";
-}
-
-// 13b: is somebody with these call letters licensed on the tuned frequency? (g_rdsMutex held)
-static bool licensedHere(const std::string &call) {
-    return std::find(g_channelCalls.begin(), g_channelCalls.end(), call) != g_channelCalls.end();
-}
-
-// 13b: the call letters for an RDS code of the 1xxx kind, from the FCC list: the ONE of its
-// nine possible calls that is licensed on this frequency. "" when the list has none or
-// several of them here (about 3 in 100 stations share their frequency with another of
-// "their" nine somewhere in the country - then it stays open), or when there is no list.
-// (g_rdsMutex held)
-static std::string tableCall(uint16_t pi) {
-    if (!g_channelKnown || (pi >> 12) != 1) return "";
-    std::string found;
-    for (const std::string &c : rds::callCandidates(pi)) {
-        if (!licensedHere(c)) continue;
-        if (!found.empty()) return "";                    // two of the nine on this frequency: can't tell
-        found = c;
-    }
-    return found;
-}
-
-// ---- 14b step 4: an RDS code that doesn't fit the frequency ------------------------------------
-// KGGI 99.1 Riverside sends the PI 69D8, which by the call-letter formula is "WIAQ" - a call
-// that isn't licensed on 99.1 (or anywhere). The app showed "WIAQ", decided the HD ("KGGI")
-// was another station's, hid the logo and refused to blend (Derek, 2026-10-02). KXLU 88.9
-// sends 3712 = "KOUS". Stations keep a stale or mistyped PI for years because US radios
-// don't use it for anything.
-// With the FCC list at hand (g_channelKnown) a call from the PI is now only taken at once if
-// it is licensed on the tuned frequency. If it is not:
-//  1. the station's own text decides: a call that IS licensed here and appears as a word in
-//     the PS or the RadioText ("99.1 KGGI - Bad Bunny - Dtmf") is the station's call;
-//  2. otherwise it may be a translator relaying its parent station (the parent's call is
-//     licensed on another frequency) - or a wrong code. The call from the PI is then held
-//     back for RDS_CALL_HOLD_MS, so the text gets its chance first, and shown after that.
-// g_rdsCallSure: the call is licensed on this frequency (or there is no list to check).
-// All under g_rdsMutex.
-static const long long RDS_CALL_HOLD_MS = 10000;
-static bool g_rdsCallSure = false;
-static std::string g_rdsTextCall;                         // the call found in the station's text ...
-static uint16_t g_rdsTextPi = 0;                          // ... and the PI it was found with
-static long long g_rdsPiSinceMs = -1;                     // msSinceTune() when this PI was first seen
-static uint16_t g_rdsPiSeen = 0;
-static bool g_rdsCallHeld = false;                        // streaming thread only: settleRdsCall() said "look again"
-
-// A call licensed on this frequency that appears as a whole word in `text` ("" = none).
-static std::string callInText(const std::string &text) {
-    std::string word;
-    for (size_t i = 0; i <= text.size(); i++) {
-        unsigned char ch = i < text.size() ? (unsigned char)text[i] : ' ';
-        if (std::isalnum(ch)) { word.push_back((char)std::toupper(ch)); continue; }
-        if (word.size() >= 3 && word.size() <= 4 && (word[0] == 'K' || word[0] == 'W') && licensedHere(word))
-            return word;
-        word.clear();
-    }
-    return "";
-}
-
-// Settles now.call (see above). Returns true while a call is being held back - the caller
-// then looks again a little later even if the RDS data itself didn't change.
-static bool settleRdsCall(rds::Status &now) {
-    g_rdsCallSure = false;
-    if (!now.piOk) return false;
-    // 13b: a 1xxx code -> the call letters from the FCC list, if it has exactly one of the
-    // nine candidates on this frequency. (The decoder's own rule comes first: a candidate
-    // the station's text mentions - "101.5 KGB" - is the station speaking for itself.)
-    if (now.call.empty()) now.call = tableCall(now.pi);
-    if (!g_channelKnown) { g_rdsCallSure = true; return false; }      // no list: as before 13b
-    if (!now.call.empty() && licensedHere(now.call)) { g_rdsCallSure = true; return false; }
-    if (g_rdsPiSeen != now.pi || g_rdsPiSinceMs < 0) { g_rdsPiSeen = now.pi; g_rdsPiSinceMs = msSinceTune(); }
-    if (g_rdsTextPi != now.pi) { g_rdsTextCall.clear(); g_rdsTextPi = now.pi; }
-    if (g_rdsTextCall.empty()) {
-        g_rdsTextCall = callInText(now.ps + " " + now.rt);
-        if (!g_rdsTextCall.empty())
-            LOGI("RDS: PI %04X = \"%s\" is not licensed on this frequency; the station's text says %s",
-                 now.pi, now.call.c_str(), g_rdsTextCall.c_str());
-    }
-    if (!g_rdsTextCall.empty()) { now.call = g_rdsTextCall; g_rdsCallSure = true; return false; }
-    if (now.call.empty()) return false;
-    if (msSinceTune() - g_rdsPiSinceMs < RDS_CALL_HOLD_MS) { now.call.clear(); return true; }
-    return false;                                                      // shown, but not "sure"
-}
-
-// Judge "same station?" again (the PI or the HD name changed). Called on the streaming
-// thread (RDS copy, station-name event). Needs g_rdsMutex FREE (takes it; the blend's lock
-// is taken after it is released - both are leaf locks).
-static void judgeSameStation() {
-    int verdict = blend::SAME_UNKNOWN;
-    uint16_t pi = 0;
-    std::string hd;
+// ---- Build 10: hand the judge's answers on (stationid.hpp) ----
+// Called on the streaming thread (every block, and on the HD station-name event) and on the
+// engine thread (after an alignment attempt). Needs g_rdsMutex FREE: it takes it, then the
+// aligner's and the blend's locks one at a time - all three are leaf locks.
+static void applyIdentity() {
+    ident::Status id;
     {
         std::lock_guard<std::mutex> lock(g_rdsMutex);
-        bool exact = false;
-        hd = usCall(g_hdCall, &exact);
-        if (!g_rds.piOk || hd.empty()) return;
-        pi = g_rds.pi;
-        std::vector<std::string> cands = rds::callCandidates(pi);
-        if (cands.empty()) return;                        // a PI that isn't a US call (Mexico, 0000...)
-        // 13b: a 1xxx code whose call letters are settled (g_rds.call: from the station's own
-        // text, or from the FCC list - see demodAnalog) -> compare with that call alone, not
-        // with all nine candidates.
-        // 14b step 4: with the FCC list, a call that is settled AND licensed on this frequency
-        // (g_rdsCallSure: by the formula, the list or the station's own text) is compared
-        // directly - so KGGI's wrong PI no longer makes its own HD "another station".
-        bool sure = g_channelKnown && g_rdsCallSure && !g_rds.call.empty();
-        bool same = sure || ((pi >> 12) == 1 && !g_rds.call.empty()) ? g_rds.call == hd
-                                                                     : rds::piMatchesCall(pi, hd);
-        if (same) verdict = blend::SAME_YES;
-        // "another station" only from a name that IS a call - 13b: and only if that call is
-        // licensed on this frequency (with the list at hand). "WAVE" on 94.7 is just a name.
-        // 14b step 4: ... and only if the ANALOG's call is licensed here too: two different
-        // stations on one frequency. A PI call from elsewhere (a relay, or a wrong code)
-        // proves nothing - the audio comparison decides then, as it does without RDS.
-        else if (exact && (!g_channelKnown || (licensedHere(hd) && sure))) verdict = blend::SAME_NO;
-        else return;                                      // "101.5 KGB"-style name without a match: can't tell
-        g_sameCall = !g_rds.call.empty() ? g_rds.call
-                   : !g_channelKnown && cands.size() == 1 ? cands[0] : "";
+        id = g_ident.status();
+        g_sameCall = id.otherName;
     }
-    if (g_sameStation.exchange(verdict) != verdict) {
-        g_blend.setSameStation(verdict);
-        LOGI("Same station? RDS PI %04X vs HD \"%s\": %s", pi, hd.c_str(),
-             verdict == blend::SAME_YES ? "yes" : "NO - the HD is another station");
+    // "Another station" changes what is HEARD only when it is confirmed - or, by the rule
+    // since M12, when two different sure calls stand against each other and the aligner
+    // has given up finding a match.
+    const bool foreign = id.contest == ident::CONTEST_CONFIRMED
+                      || (id.contest != ident::CONTEST_NONE && id.strong && g_align.status().state == 3);
+    if (g_sameStation.exchange(id.same) != id.same) {
+        g_blend.setSameStation(id.same);
+        LOGI("Same station? %s", id.same == blend::SAME_YES ? "yes" : id.same == blend::SAME_NO ? "NO - the analog is another station's" : "can't tell");
+    }
+    if (g_contest.exchange(id.contest) != id.contest)
+        LOGI("Another station's analog on this frequency? %s%s%s", id.contest == ident::CONTEST_NONE ? "no" : id.contest == ident::CONTEST_CONFIRMED ? "CONFIRMED" : "suspected - checking the audio",
+             id.otherName.empty() ? "" : ": ", id.otherName.c_str());
+    if (g_foreign.exchange(foreign) != foreign) {
+        g_blend.setAnalogForeign(foreign);
+        LOGI("Blend: %s", foreign ? "the analog here is another station - the HD plays alone" : "the analog is this station's - the ordinary blend");
     }
 }
 
@@ -735,17 +616,23 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
         g_fmStereo = g_fm.stereoAmount();
     }
     // M12: RDS - copy the decoder's status when something changed (a few times a second at most).
-    // 14b step 4: ... or while a call is being held back (it becomes due without any new RDS data).
-    bool rdsChanged = g_fm.rds().serial() != g_rdsSerial || g_rdsCallHeld;
-    if (rdsChanged) {
-        g_rdsSerial = g_fm.rds().serial();
-        rds::Status now = g_fm.rds().status();
+    // Build 10: the call letters are settled by stationid.hpp (g_ident.onRds puts into
+    // now.call what may be shown as the station's name), and every block tells it which
+    // station's RDS blocks came in lately - that is what "on the air right now" rests on.
+    // Its clock is the samples' own time, so a recording gives the same answers every run.
+    {
+        const double tNow = (double)g_iqBlockStart / SAMPLE_RATE;
         std::lock_guard<std::mutex> lock(g_rdsMutex);
-        g_rdsCallHeld = settleRdsCall(now);           // 13b + 14b step 4: the call letters
-        if (now.piOk && !g_rds.piOk) LOGI("RDS: PI %04X %s", now.pi, now.call.c_str());
-        g_rds = now;
+        if (g_fm.rds().serial() != g_rdsSerial) {
+            g_rdsSerial = g_fm.rds().serial();
+            rds::Status now = g_fm.rds().status();
+            g_ident.onRds(now, tNow);
+            if (now.piOk && (!g_rds.piOk || g_rds.pi != now.pi)) LOGI("RDS: PI %04X %s", now.pi, now.call.c_str());
+            g_rds = now;
+        }
+        g_ident.tick(tNow, g_fm.rds().lately());
     }
-    if (rdsChanged) judgeSameStation();               // M12 step 2 (outside g_rdsMutex)
+    applyIdentity();                                  // (outside g_rdsMutex)
     if (g_audioSource.load() == SOURCE_ANALOG) g_audioCv.notify_one();
     // Load: time spent here vs the time this block of samples represents.
     double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
@@ -997,8 +884,12 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
             if (evt->station_name.name && st.stationName != evt->station_name.name) {
                 st.stationName = evt->station_name.name;
                 LOGI("Station name: %s", st.stationName.c_str());
-                { std::lock_guard<std::mutex> lock(g_rdsMutex); g_hdCall = st.stationName; }   // M12 step 2
-                if (g_mode == NRSC5_MODE_FM) judgeSameStation();
+                {   // M12 step 2 / build 10: the judge hears who the HD says it is
+                    std::lock_guard<std::mutex> lock(g_rdsMutex);
+                    g_hdCall = st.stationName;
+                    if (g_mode == NRSC5_MODE_FM) g_ident.onHdName(st.stationName, (double)g_iqBlockStart / SAMPLE_RATE);
+                }
+                if (g_mode == NRSC5_MODE_FM) applyIdentity();
             }
             break;
         case NRSC5_EVENT_STATION_SLOGAN:
@@ -1452,12 +1343,14 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     {   // M12: no RDS of the old station; step 2: no "same station?" verdict either
         std::lock_guard<std::mutex> lock(g_rdsMutex);
         g_rds = rds::Status(); g_hdCall.clear(); g_sameCall.clear();
-        g_rdsCallSure = false; g_rdsTextCall.clear(); g_rdsTextPi = 0; g_rdsPiSinceMs = -1; g_rdsPiSeen = 0;   // 14b step 4
+        g_ident.newTune();                   // build 10 (keeps the FCC list and the logo's owner, both set before the tune)
     }
     g_sameStation = blend::SAME_UNKNOWN;
     g_blend.setSameStation(blend::SAME_UNKNOWN);
+    g_contest = ident::CONTEST_NONE;         // build 10
+    g_foreign = false;
+    g_blend.setAnalogForeign(false);
     g_rdsSerial = g_fm.rds().serial();
-    g_rdsCallHeld = false;                   // 14b step 4
     g_fmLoadPct = 0;
     g_fmLoad.reset();                        // 9i
     g_align.reset();                         // 11c: alignment starts fresh too
@@ -1814,7 +1707,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // toAnalog, or "sub" while a sub-channel (HD2+) plays live, "off" outside Auto.
     {
         blend::Status b = g_blend.status();
+        // Build 10: "alone" = the analog on this frequency is another station's and the HD
+        // stands alone - it plays, or (blendSilent=1) the silence waits for it to come back.
         const char *state = src != SOURCE_AUTO ? "off" : g_program.load() != 0 ? "sub"
+                          : b.alone ? "alone"
                           : b.state == blend::HD ? "hd" : b.state == blend::TO_HD ? "toHd"
                           : b.state == blend::TO_ANALOG ? "toAnalog" : "analog";
         snprintf(buf, sizeof(buf),
@@ -1822,6 +1718,9 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
                  "blendHdSecs=%.0f\nblendSinceSecs=%.0f\nblendMatchDb=%.1f\nblendReason=%s\n",
                  state, b.aligned ? 1 : 0, b.mismatch ? 1 : 0, b.toHd, b.toAnalog,
                  b.hdFrames / 44100.0, b.hdSince / 44100.0, b.matchDb, b.reason.c_str());
+        out += buf;
+        snprintf(buf, sizeof(buf), "blendSilent=%d\nblendSilentSecs=%.0f\nblendSilences=%d\n",
+                 b.silent ? 1 : 0, b.silentFrames / 44100.0, b.silences);
         out += buf;
     }
     // 11c: alignment (see aligner.hpp). alignMs = how far the analog lags HD1 in
@@ -1879,11 +1778,23 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // = the HD call sign), 2 = no (another station's HD). hdSameCall = the analog's call
     // letters (kept until the next tune, also while the demodulator is off).
     {
+        // Build 10 (stationid.hpp): rdsCallMaybe = what the US formula makes of the RDS code
+        // when nobody vouches for it ("WHTZ" for XHITZ's 692B) - never a name, only a note;
+        // hdOwnPi = the HD station's own RDS code in hex ("" = not known), the code its saved
+        // logo is filed under; hdContest = is another station's analog on this frequency right
+        // now? 0 no, 1 suspected (checking the audio), 2 confirmed (the HD plays alone).
         std::string sameCall, hdName;     // hdName: the HD's own name, kept even while the HD is off
-        { std::lock_guard<std::mutex> lock(g_rdsMutex); sameCall = g_sameCall; hdName = g_hdCall; }
-        out += "hdSame=" + std::to_string(g_mode == NRSC5_MODE_FM ? g_sameStation.load() : 0) + "\n";
+        ident::Status id;
+        { std::lock_guard<std::mutex> lock(g_rdsMutex); sameCall = g_sameCall; hdName = g_hdCall; id = g_ident.status(); }
+        const bool fm = g_mode == NRSC5_MODE_FM;
+        out += "hdSame=" + std::to_string(fm ? g_sameStation.load() : 0) + "\n";
         out += "hdSameCall=" + clean(sameCall) + "\n";
         out += "hdOtherName=" + clean(hdName) + "\n";
+        out += "rdsCallMaybe=" + (fm && demodWanted() ? clean(id.callMaybe) : std::string()) + "\n";
+        char own[8] = "";
+        if (fm && id.ownPi >= 0) snprintf(own, sizeof(own), "%04X", id.ownPi);
+        out += std::string("hdOwnPi=") + own + "\n";
+        out += "hdContest=" + std::to_string(fm ? g_contest.load() : 0) + "\n";
     }
     out += std::string("hdOn=") + (g_hdOn.load() ? "1" : "0") + "\n";   // 12a step 3: off in Analog only
     {   // Build 9: the HD search on a station without HD (hdsearch.hpp): on / rest / look,
@@ -2167,8 +2078,28 @@ Java_io_github_derek20la_hidefradio_RadioEngine_setChannelCallsNative(JNIEnv *en
     LOGI("FCC list: %s", known == JNI_TRUE ? (std::to_string(list.size()) + " call sign(s) licensed on this frequency").c_str()
                                            : "none for this frequency");
     std::lock_guard<std::mutex> lock(g_rdsMutex);
-    g_channelCalls = std::move(list);
-    g_channelKnown = known == JNI_TRUE;
+    g_ident.setChannel(std::move(list), known == JNI_TRUE);
+}
+
+// Kotlin (RadioEngine): external fun setHdOwnerNative(name: String, pi: Int)
+// Build 10: what the app remembers about the HD station on the frequency about to be tuned -
+// the owner written into its saved logo's file name (LogoCache.kt): the HD station's name as
+// stored ("KDSC") and its own RDS code (0x19C2; -1 = not known). "" / -1 = nothing remembered.
+// With it the app knows from the first second that a different code on this frequency
+// (F000 = XETRA-FM) is another station's. Called before startStreamNative (which doesn't
+// clear it), like setChannelCallsNative. Any thread.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_setHdOwnerNative(JNIEnv *env, jobject, jstring name, jint pi) {
+    std::string owner;
+    if (name != nullptr) {
+        const char *text = env->GetStringUTFChars(name, nullptr);     // letters and digits only (LogoCache.ownerKey)
+        if (text != nullptr) { owner = text; env->ReleaseStringUTFChars(name, text); }
+    }
+    if (owner.empty()) LOGI("Saved logo's owner: none");
+    else if (pi >= 0) LOGI("Saved logo's owner: %s, RDS code %04X", owner.c_str(), (unsigned)pi & 0xFFFF);
+    else LOGI("Saved logo's owner: %s (RDS code not known yet)", owner.c_str());
+    std::lock_guard<std::mutex> lock(g_rdsMutex);
+    g_ident.setOwner(owner, owner.empty() ? -1 : (int)pi);
 }
 
 // Kotlin (RadioEngine): external fun measureAlignmentNative(): Int
@@ -2181,6 +2112,11 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
     if (!g_streaming || g_mode != NRSC5_MODE_FM || !demodWanted()) return 0;   // 11d: off in Digital only
     align::Result r;
     if (!g_align.measure(r)) return 0;
+    {   // Build 10: every attempt, accepted or not, is evidence for "is this the HD's own analog?"
+        std::lock_guard<std::mutex> lock(g_rdsMutex);
+        g_ident.onAlign(r.accepted, r.corr, r.hdCover, (double)g_iqPos.load() / SAMPLE_RATE);
+    }
+    applyIdentity();
     if (r.accepted) {
         // Build 6: every accepted measurement also tells the clock correction how the analog
         // moves against the HD (drift.hpp).
@@ -2195,7 +2131,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
              d.clockPpm, d.state == 2 ? " (measured)" : d.state == 1 ? " (from the tuning offset)" : " (not corrected)", note);
         return 1;
     }
-    LOGI("Alignment: no match (r %.3f%s)", r.corr, r.usedHint ? ", near the expected value" : ", full search");
+    LOGI("Alignment: no match (r %.3f%s; HD audio there: %.0f %%)", r.corr, r.usedHint ? ", near the expected value" : ", full search", r.hdCover * 100.0f);
     return 2;
 }
 

@@ -40,6 +40,8 @@
     <string name="other_hd_listen">⚠ The HD here is %1$s (another station) - tap to listen</string>
     <string name="other_analog_listen">⚠ The analog here is %1$s (another station) - tap to listen</string>
     <string name="other_analog_listen_unnamed">⚠ The analog here is another station - tap to listen</string>
+    <!-- Build 10: the HD stands alone (the analog on this frequency is another station's) and has dropped out -->
+    <string name="signal_silent">HD dropout - silence (%1$d s)</string>
     <string name="now_image">Album art or station logo</string>
     <string name="station_logo">Station logo</string>
 

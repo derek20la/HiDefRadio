@@ -35,6 +35,25 @@
 // so the HD plays ~0.3 s behind live, like Digital only: a one-time jump of
 // ~2.5 s) or stay on the analog.
 //
+// Build 10 - "the HD plays alone": two stations can share a frequency (KDSC's HD and the
+// analog of XETRA-FM, "91X", on 91.1 west of Los Angeles, 2026-10-09). Then the analog is
+// NOT this HD's programme, and falling back on it in every dropout swaps between two
+// stations - five times a minute that evening. stationid.hpp works out when that is the
+// case (setAnalogForeign), and while it is, the HD is treated like an HD2 sub-channel,
+// which has no analog either:
+//   - the HD comes in once it has been good for 2 s (a normal 0.5 s crossfade from the
+//     other station, which is what was playing), unaligned, 0.6 s behind live;
+//   - a dropout ahead -> the HD fades out to SILENCE (fast: the look-ahead is only 0.2 s);
+//     the HD back -> the HD again at once. No waiting times in this mode;
+//   - safety net: 10 s of silence -> the other station's analog is given back (someone who
+//     drives out of the HD's range must not sit in silence for ever), and the HD returns
+//     only after it has been good for 5 s;
+//   - with the setting "stay on analog" the HD is never put on;
+//   - the contest over -> a fade back to the analog and the ordinary, aligned blend.
+// The silence is made by a second gain on the analog leg (aGain_, 1 = heard, 0 = muted)
+// that is only applied when it is not 1 - so on every ordinary station the samples come
+// out exactly as before.
+//
 // Threads: pushAnalog/pushHd on the streaming thread, read() on the audio
 // thread, status()/reset() from wherever. One mutex (m_), a LEAF lock: it is
 // taken while native-lib holds g_statusMutex (pushHd) - never the other way.
@@ -74,6 +93,17 @@ static const float MAX_MATCH_DB = 12.0f;                  // never scale the ana
 // (Tuned on 20 recordings with the antenna moved every ~10 s, 2026-09-28: 5/15/30 s and a
 //  60 s reset kept the analog playing far longer than the dropouts themselves.)
 static const long long DWELL_FRAMES[] = { 0, RATE * 3, RATE * 8, RATE * 15 };
+// Build 10, "the HD plays alone" (see the top of the file):
+static const long long ALONE_FIRST_GOOD = RATE * 2;       // the HD must have been good this long before it comes in
+static const long long ALONE_NET_FRAMES = RATE * 10;      // this much silence -> the other station's analog is given back
+static const long long ALONE_NET_GOOD = RATE * 5;         // ... and the HD must then be good this long to return
+static const long long ALONE_LATENCY = RATE * 6 / 10;      // the HD alone plays this far behind live. More than the 0.3 s
+                                                          // of UNALIGNED_LATENCY: nrsc5 hands its audio over in steps
+                                                          // of ~0.09 s, and with only 0.1 s to spare a late step looked
+                                                          // like a dropout (seen in the harness: one false fade). There
+                                                          // is nothing to keep in time with here, so the room is free.
+static const long long ALONE_FAST = 4;                    // fade to / from silence 4x as fast as a crossfade: 0.125 s
+                                                          // (0.125 s + one decision every 0.05 s < the 0.2 s look-ahead)
 
 enum State { ANALOG = 0, TO_HD = 1, HD = 2, TO_ANALOG = 3 };
 
@@ -89,6 +119,11 @@ struct Status {
     long long hdSince = 0;        // frames since the current HD stretch began (0 when not on HD)
     float matchDb = 0;            // the analog level correction in use (dB, negative = turned down)
     std::string reason;           // why the last fade happened (for the details)
+    // Build 10: the analog on this frequency is another station's (setAnalogForeign)
+    bool alone = false;           // ... and the HD stands alone: it plays, or the silence waits for it
+    bool silent = false;          // ... the silence is waiting right now
+    long long silentFrames = 0;   // ... for this long
+    int silences = 0;             // fades to silence, since the tune
 };
 
 class Blender {
@@ -107,6 +142,8 @@ public:
         state_ = ANALOG; ramp_ = 0; offset_ = 0; aligned_ = false;
         returns_ = 0; dwellUntil_ = 0; hdStreak_ = 0;
         matchDb_ = 0; matchTargetDb_ = 0;
+        alone_ = false; heardAnalog_ = true; aGain_ = 1.0f; rampStep_ = 1;     // build 10
+        hdGoodRun_ = 0; silentFrames_ = 0; needGood_ = ALONE_FIRST_GOOD;
         st_ = Status();
     }
 
@@ -125,6 +162,14 @@ public:
     void setSameStation(int verdict) {
         std::lock_guard<std::mutex> lock(m_);
         sameStation_ = verdict;
+    }
+
+    // Build 10: the analog on this frequency is ANOTHER station's than the HD (judged by
+    // stationid.hpp from the RDS codes and the audio) - see "the HD plays alone" at the top.
+    // Not cleared by reset() - native-lib sets it on every tune, like setSameStation.
+    void setAnalogForeign(bool yes) {
+        std::lock_guard<std::mutex> lock(m_);
+        foreign_ = yes;
     }
 
     // Streaming thread: analog audio as it comes out of the demodulator (11b: stereo,
@@ -152,6 +197,7 @@ public:
         // A gap (first audio, or a new run after a sync loss): those frames were never received.
         for (long long f = std::max(hdFrontier_, index - (long long)HD_RING); f < index; f++)
             hdGood_[(size_t)(f % (long long)HD_RING)] = 0;
+        if (index > hdFrontier_) hdGoodRun_ = 0;          // build 10: a gap ends the run of good HD
         // A piece that is all zero is one nrsc5 filled in for a missing or damaged
         // packet (or a sync loss): a dropout, not music.
         bool silent = true;
@@ -164,6 +210,7 @@ public:
         }
         hdFrontier_ = index + (long long)frames;
         hdOldest_ = std::max(hdOldest_, hdFrontier_ - (long long)HD_RING);
+        hdGoodRun_ = silent ? 0 : hdGoodRun_ + (long long)frames;   // build 10: how long the HD has been good without a break
     }
 
     // The demodulator was switched on while the stream was already running
@@ -217,7 +264,10 @@ public:
         // Level match (analog -> HD loudness), aimed at the aligner's measurement.
         if (al.accepted > 0) matchTargetDb_ = std::max(-MAX_MATCH_DB, std::min(MAX_MATCH_DB, -al.gainDb));
         else matchTargetDb_ = 0;
+        if (foreign_) matchTargetDb_ = 0;                 // build 10: that measurement belongs to another programme
         decide(al);                                       // state changes, once per read (every ~46 ms)
+        const float aTarget = heardAnalog_ ? 1.0f : 0.0f; // build 10: the analog leg, heard or muted
+        const float aStep = 1.0f / (float)FADE_FRAMES;
 
         const float slew = GAIN_SLEW_DB_PER_S / RATE;
         for (size_t i = 0; i < n; i++) {
@@ -227,10 +277,15 @@ public:
             if (i % 441 == 0) matchLin_ = std::pow(10.0f, matchDb_ / 20.0f);   // dB -> factor, every 10 ms is plenty
             size_t aslot = (size_t)(play_ % (long long)ANALOG_RING);
             float l = analog_[aslot * 2] * matchLin_, r = analog_[aslot * 2 + 1] * matchLin_;   // 11b: stereo
+            if (aGain_ != 1.0f || aTarget != 1.0f) {      // build 10: only when the analog is (being) muted
+                if (aGain_ < aTarget) aGain_ = std::min(aTarget, aGain_ + aStep);
+                else if (aGain_ > aTarget) aGain_ = std::max(aTarget, aGain_ - aStep);
+                l *= aGain_; r *= aGain_;
+            }
             if (state_ != ANALOG) {
-                // the blend ramp: 0 = analog, 1 = HD
-                if (state_ == TO_HD && ramp_ < FADE_FRAMES) ramp_++;
-                else if (state_ == TO_ANALOG && ramp_ > 0) ramp_--;
+                // the blend ramp: 0 = analog, 1 = HD (build 10: rampStep_ is 1, or 4 to and from silence)
+                if (state_ == TO_HD && ramp_ < FADE_FRAMES) ramp_ = std::min(FADE_FRAMES, ramp_ + rampStep_);
+                else if (state_ == TO_ANALOG && ramp_ > 0) ramp_ = std::max(0LL, ramp_ - rampStep_);
                 float g = 0.5f - 0.5f * std::cos((float)M_PI * (float)ramp_ / (float)FADE_FRAMES);
                 long long h = play_ - offset_;
                 float hl = 0, hr = 0;
@@ -245,10 +300,13 @@ public:
                     state_ = ANALOG;
                     // Came back to analog: wait before trying HD again (longer each time it
                     // happens again soon - a signal on the edge would otherwise flap).
+                    if (alone_) { silentFrames_ = 0; }    // build 10: no waiting times while the HD stands alone
+                    else {
                     if (hdStreak_ >= HD_HELD_RESET) returns_ = 0;
                     if (reversible_) {                    // came back because of a dropout
                         dwellUntil_ = play_ + DWELL_FRAMES[std::min(returns_, 3)];
                         returns_++;
+                    }
                     }
                     hdStreak_ = 0;
                 }
@@ -258,6 +316,12 @@ public:
             out[2 * i + 1] = clip(r);
             play_++;
         }
+        // Build 10: the silence is counted while it lasts (decideAlone's safety net reads it).
+        const bool silentNow = alone_ && !heardAnalog_ && state_ == ANALOG;
+        if (silentNow) silentFrames_ += (long long)n;
+        st_.alone = alone_ && !heardAnalog_;
+        st_.silent = silentNow;
+        st_.silentFrames = silentNow ? silentFrames_ : 0;
         st_.state = state_;
         st_.aligned = aligned_;
         st_.matchDb = matchDb_;
@@ -309,6 +373,7 @@ private:
         st_.mismatch = noMatch;
         bool resume = resume_;                            // 13b step 2: the first decision after a (re)start
         resume_ = false;
+        if (foreign_ || alone_) { decideAlone(resume); return; }   // build 10: the analog is another station's
         if (state_ == ANALOG) {
             if (play_ < dwellUntil_) return;
             if (alignedOk) {
@@ -340,6 +405,70 @@ private:
         }
     }
 
+    // Build 10: the decisions while the analog on this frequency is another station's
+    // ("the HD plays alone", top of the file). Called with m_ held, once per read().
+    // heardAnalog_ says what fills the place of the HD when it is not there: the other
+    // station's analog (true - at the start, after the safety net, with "stay on analog",
+    // and on the way out) or silence (false).
+    void decideAlone(bool resume) {
+        if (!alone_) {                                    // coming in: keep what is playing, change the rules
+            alone_ = true; heardAnalog_ = true; aGain_ = 1.0f; rampStep_ = 1;
+            needGood_ = ALONE_FIRST_GOOD; silentFrames_ = 0;
+            dwellUntil_ = 0; returns_ = 0;
+        }
+        const bool onHd = state_ == HD || state_ == TO_HD;
+        if (!foreign_ || !unmatchedPlaysHd_) {
+            // The contest is over - or the setting says "stay on analog": the analog plays.
+            heardAnalog_ = true; rampStep_ = 1;
+            if (state_ == HD) aGain_ = 1.0f;              // inaudible here (the HD has all the weight)
+            if (onHd) {
+                startFade(TO_ANALOG, aligned_, offset_, foreign_ ? "the analog here is another station - staying on the analog"
+                                                                   : "the analog is this station's again");
+                reversible_ = false;
+            }
+            // Back to the ordinary blend once the analog is fully there.
+            if (!foreign_ && state_ == ANALOG && aGain_ == 1.0f) { alone_ = false; needGood_ = ALONE_FIRST_GOOD; }
+            return;
+        }
+        if (state_ == HD && heardAnalog_) {               // the crossfade from the other station is done:
+            heardAnalog_ = false; aGain_ = 0.0f;          // from here the HD stands alone (inaudible switch, see above)
+        }
+        if (onHd) {
+            // A dropout ahead? The fast fade needs 0.125 s; we look 0.2 s ahead.
+            if (!hdClean(play_ - offset_, UNALIGNED_CLEAN)) {
+                state_ = TO_ANALOG; reversible_ = false;
+                if (heardAnalog_) { rampStep_ = 1; st_.toAnalog++; st_.reason = "dropout ahead"; }   // still coming from the other station
+                else { rampStep_ = ALONE_FAST; st_.silences++; st_.reason = "HD dropout - silence (the analog here is another station)"; }
+            }
+            return;
+        }
+        if (state_ == TO_ANALOG) return;                  // a fade (to silence, or back to the analog) finishes first
+        // state_ == ANALOG: the other station's analog is heard, or the silence waits.
+        if (!heardAnalog_ && silentFrames_ >= ALONE_NET_FRAMES) {
+            heardAnalog_ = true; needGood_ = ALONE_NET_GOOD;   // the safety net: aGain_ comes up over 0.5 s
+            st_.toAnalog++;
+            st_.reason = "no HD for 10 s - back to the analog (another station)";
+            return;
+        }
+        // The HD (again)? Only if it is arriving NOW: while the HD decoder is off ("Analog only",
+        // or the rest of the HD search) nothing new comes, and the newest audio in the ring is
+        // seconds old - good, clean, and not to be played. (Both streams are counted on one
+        // time line, so the HD is live when its newest frame is close to the newest analog one.)
+        if (hdFrontier_ < aWritten_ - RATE) return;
+        // It plays 0.6 s behind live (see ALONE_LATENCY).
+        const long long off = play_ - (hdFrontier_ - ALONE_LATENCY);
+        if (!hdClean(play_ - off, UNALIGNED_CLEAN)) return;
+        if (heardAnalog_) {
+            if (hdGoodRun_ < needGood_) return;
+            rampStep_ = 1;                                // from the other station: an ordinary crossfade
+            goToHd(false, false, off, "the analog here is another station - the HD plays alone");
+        } else {
+            rampStep_ = ALONE_FAST;                       // from silence: at once
+            goToHd(resume, false, off, "the HD is back (it plays alone)");
+            if (!resume) st_.toHd--;                      // not a blend: counted as a silence, not as "to HD"
+        }
+    }
+
     mutable std::mutex m_;
     std::condition_variable cv_;
     std::vector<int16_t> analog_, hd_;
@@ -352,6 +481,14 @@ private:
     bool unmatchedPlaysHd_ = true; bool reversible_ = false;
     bool resume_ = false;                                 // 13b step 2: a (re)start is waiting for its first decide()
     int sameStation_ = SAME_UNKNOWN;                      // M12 step 2
+    // Build 10 ("the HD plays alone")
+    bool foreign_ = false;                                // the analog is another station's (setAnalogForeign)
+    bool alone_ = false;                                  // ... and decideAlone() is in charge
+    bool heardAnalog_ = true;                             // what stands in for the HD: the analog (true) or silence
+    float aGain_ = 1.0f;                                  // the analog leg's gain, slewing to 1 (heard) or 0 (muted)
+    long long rampStep_ = 1;                              // fade speed: 1 = 0.5 s, ALONE_FAST = 0.125 s
+    long long hdGoodRun_ = 0;                             // frames of good HD in one piece, up to the newest
+    long long silentFrames_ = 0, needGood_ = ALONE_FIRST_GOOD;
     Status st_;
 };
 

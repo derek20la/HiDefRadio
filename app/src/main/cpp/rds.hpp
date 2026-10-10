@@ -146,6 +146,16 @@ struct Status {
     long blocksClean = 0, blocksFixed = 0, blocksBad = 0;   // totals since the tune (while synced)
 };
 
+// Build 10: whose blocks came in lately? Every group starts with block A = the station's PI
+// code, 11 times a second. When two stations share a frequency (KDSC and XETRA-FM on 91.1,
+// 2026-10-09) the receiver hears whichever is stronger at the moment, and so does this
+// decoder - the confirmed PI follows with a delay (three clean blocks of the newcomer), and
+// status() does not say how OLD its PI is. This does: of the clean block A's of the last
+// few seconds, how many carried the current PI (cur), how many another one (other), and
+// how long ago the current PI was last seen clean (ageCur, seconds; huge = never).
+// stationid.hpp uses it to tell "this PI is on the air right now" from "this was the PI".
+struct Lately { int cur = 0, other = 0; double ageCur = 1e9; };
+
 class Decoder {
 public:
     explicit Decoder(double mpxRate = 297675.0) : fsIn(mpxRate) { reset(); }
@@ -166,8 +176,25 @@ public:
         nGroups = nClean = nFixed = nBad = 0;
         piOk = false; piCur = 0; piCand = 0; piCnt = 0;
         pty = -1; ptyCand = -1; ptyCnt = 0; tp = ta = false;
+        for (Seen &e : seenA) e = Seen();                 // build 10
+        seenPos = 0;
         clearText();
         serial_++;
+    }
+
+    // Build 10: see the Lately struct above. Cheap (64 entries), any time on the decoder's thread.
+    Lately lately(double seconds = 3.0) const {
+        Lately l;
+        if (!piOk) return l;
+        const long long window = (long long)(seconds * BIT_RATE);
+        for (const Seen &e : seenA) {
+            if (e.bit < 0) continue;
+            long long age = bitNo - e.bit;
+            if (e.pi == piCur) l.ageCur = std::min(l.ageCur, (double)age / BIT_RATE);
+            if (age > window) continue;
+            if (e.pi == piCur) l.cur++; else l.other++;
+        }
+        return l;
     }
 
     // One MPX sample. Cost: one table look-up, and a ~140-tap filter on every 25th sample.
@@ -437,6 +464,7 @@ private:
 
     void group() {
         nGroups++;
+        if (blkSt[0] == 2) { seenA[seenPos] = Seen{ bitNo, blk[0] }; seenPos = (seenPos + 1) & 63; }   // build 10: a clean block A
         if (blkSt[0]) gotPi(blk[0], blkSt[0]);
         if (!piOk) return;                                   // nothing is shown before we know who it is
         if (blkSt[0] && blk[0] != piCur) return;             // somebody else's group (co-channel)
@@ -579,6 +607,8 @@ private:
     long nGroups = 0, nClean = 0, nFixed = 0, nBad = 0;
 
     bool piOk = false; uint16_t piCur = 0, piCand = 0; int piCnt = 0;
+    struct Seen { long long bit = -1; uint16_t pi = 0; };    // build 10: the last 64 clean block A's (lately())
+    Seen seenA[64]; int seenPos = 0;
     int pty = -1, ptyCand = -1, ptyCnt = 0; bool tp = false, ta = false;
     uint16_t psVal[4] = {}; int psCnt[4] = {}; long psBit[4] = {}, psSince = 0;
     bool psOk = false; uint8_t psPub[8] = {};

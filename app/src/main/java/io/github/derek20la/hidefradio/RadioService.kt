@@ -295,6 +295,12 @@ class RadioService : Service() {
         // Americas region only; elsewhere the native code works without the list.
         val calls = if (!FmBand.isAm(hz) && Settings.band(this) == FmBand.AMERICAS) Stations.callsOn(this, hz) else null
         RadioEngine.setChannelCallsNative(calls ?: "", calls != null)
+        // Build 10: and whose HD the saved logo of this frequency belongs to (its file name
+        // carries the station's name and its own RDS code) - so a different RDS code here is
+        // recognised as another station's analog at once.
+        val owner = if (FmBand.isAm(hz)) null else LogoCache.owner(this, hz)
+        RadioEngine.setHdOwnerNative(owner?.name ?: "", owner?.pi?.toIntOrNull(16) ?: -1)
+        savedOwnerKey = ""
         streamInfo = RadioEngine.startStreamNative(hz, gain, hint)
         Log.i(TAG, streamInfo)
         lastBytes = 0L
@@ -613,14 +619,37 @@ class RadioService : Service() {
      * notification updater; does nothing unless the pictures changed.
      */
     private fun saveNewLogos() {
+        // Build 10: a logo is saved WITH ITS OWNER in the file name - the HD station's name
+        // and, once known, its own RDS code ("91.1-HD1-KDSC-19C2.img") - because a frequency
+        // is not a station: 91X's analog played under KDSC's saved logo (2026-10-10).
+        val s = signal()
+        val owner = s.hdOtherName.ifEmpty { s.station }
+        val ownPi = if (s.am) "" else s.hdOwnPi
         val gen = pictureGen()
-        if (gen == savedPictureGen) return
-        savedPictureGen = gen
-        for (program in programs()) {
-            val bytes = logo(program.number) ?: continue
-            LogoCache.save(this, freqHz, program.number, bytes)   // only writes if it's new
+        if (gen != savedPictureGen) {
+            savedPictureGen = gen
+            for (program in programs()) {
+                val bytes = logo(program.number) ?: continue
+                LogoCache.save(this, freqHz, program.number, bytes, owner, ownPi)   // only writes if it's new
+            }
+        }
+        // The name or the code became known after the logos were saved (the code takes a few
+        // seconds; logos saved by an older version have no owner at all): write it into the
+        // file names now. Once per change.
+        val key = "$freqHz/$owner/$ownPi"
+        if (owner.isNotEmpty() && key != savedOwnerKey) {
+            savedOwnerKey = key
+            LogoCache.setOwner(this, freqHz, owner, ownPi)
         }
     }
+
+    // Build 10: the "frequency / owner / code" last written into the logo file names.
+    private var savedOwnerKey = ""
+
+    // Build 10: may the logo SAVED for this frequency be shown right now? (LogoCache.fits -
+    // not while the analog heard sends another RDS code than the logo's owner.) Set by
+    // nowPlaying(), used by pictureFor().
+    private var savedLogoFits = true
 
     /**
      * Milestone 9b: switch to another program of the same station (e.g. HD2).
@@ -1047,6 +1076,7 @@ class RadioService : Service() {
 
         val s = signal()
         val callSign = s.station
+        savedLogoFits = LogoCache.fits(this, freqHz, s.station, s.analog, s.rdsPi)   // build 10
         // M12 step 2: an analog-only FM station (no HD at all), or the analog while the HD
         // here is another station's -> what the station says over RDS:
         //   Vogue                          no tagged song:  KKLA 99.5 FM
@@ -1063,7 +1093,7 @@ class RadioService : Service() {
                 else -> station to s.rdsRt.ifEmpty { type }
             }
             // The other station's HD logo / art would be the wrong picture -> none then.
-            val key = if (s.otherHd) PICTURE_NONE else "live/${pictureGen()}/$freqHz/0/${LogoCache.version}"
+            val key = if (s.otherHd) PICTURE_NONE else "live/${pictureGen()}/$freqHz/0/${LogoCache.version}/$savedLogoFits"
             return NowPlaying(line1, line2, album, key)
         }
         val number = currentProgram()
@@ -1082,7 +1112,7 @@ class RadioService : Service() {
             artist.isNotEmpty() -> artist to station
             else -> station to name.ifEmpty { if (s.slogan != callSign) s.slogan else "" }
         }
-        return NowPlaying(line1, line2, album, "live/${pictureGen()}/$freqHz/$number/${LogoCache.version}")
+        return NowPlaying(line1, line2, album, "live/${pictureGen()}/$freqHz/$number/${LogoCache.version}/$savedLogoFits")
     }
 
     /**
@@ -1100,7 +1130,7 @@ class RadioService : Service() {
             LogoCache.load(this, pendingFreqHz, pendingProgram)
         } else {
             val number = currentProgram()
-            art(number) ?: logo(number) ?: LogoCache.load(this, freqHz, number)
+            art(number) ?: logo(number) ?: (if (savedLogoFits) LogoCache.load(this, freqHz, number) else null)
         }
         picture = bytes?.let { shrink(BitmapFactory.decodeByteArray(it, 0, it.size)) }
         return picture

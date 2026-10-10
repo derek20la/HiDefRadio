@@ -95,6 +95,90 @@ int main() {
     b.reset(); aW = 0; dropFrom = dropTo = -1;
     play(2048.0 / RATE, nullptr, &fs, &pure);
     check("after reset(): on the analog (the HD ring is empty)", fs == ANALOG);
+
+    // ================= build 10: the analog on this frequency is ANOTHER station's =================
+    // ("the HD plays alone", blend.hpp). Same made-up audio: analog = 1000 on both channels,
+    // HD = a ramp with R = -L, silence = 0 / 0 - every output frame says what was heard.
+    struct Heard { long long analog = 0, hd = 0, silent = 0, mixed = 0; };
+    auto hear = [&](double secs) {
+        Heard h; long long n = (long long)(secs * RATE);
+        for (long long done = 0; done < n; done += 2048) {
+            pushSecond(2048.0 / RATE);
+            size_t got = b.read(out.data(), 2048, 0, al);
+            for (size_t i = 0; i < got; i++) {
+                int16_t l = out[2 * i], r = out[2 * i + 1];
+                if (l == 1000 && r == 1000) h.analog++;
+                else if (l == 0 && r == 0) h.silent++;        // (one HD frame in 20,000 is 0 / 0 too)
+                else if (l == (int16_t)-r) h.hd++;
+                else h.mixed++;
+            }
+        }
+        return h;
+    };
+    b.reset(); aW = 0; dropFrom = dropTo = -1;
+    b.setUnmatchedPlaysHd(true);                   // the app's default: "play the HD anyway"
+    b.setAnalogForeign(true);
+    al = align::Status(); al.state = 3;            // the aligner: no match (it is not asked in this mode)
+    Heard h = hear(1.5);
+    check("foreign: the other station's analog first (HD not yet good for 2 s)", b.status().state == ANALOG && h.hd == 0 && h.silent == 0 && h.analog > 0);
+    hear(1.5);
+    check("... then a crossfade to the HD, counted once", (b.status().state == HD || b.status().state == TO_HD) && b.status().toHd == 1);
+    hear(0.5); h = hear(2.0);
+    check("... the HD alone: pure HD, flagged 'alone'", b.status().state == HD && b.status().alone && !b.status().silent && h.analog == 0 && h.mixed == 0 && h.hd > 80000);
+    // a 3 s dropout: silence, never the other station
+    dropFrom = aW + RATE / 2; dropTo = dropFrom + 3 * RATE;
+    h = hear(3.0);
+    check("dropout: fades to SILENCE - not one frame of the analog", h.analog == 0 && h.silent > 2 * RATE && b.status().silent && b.status().alone);
+    check("... counted as a silence, not as a fade to analog", b.status().silences == 1 && b.status().toAnalog == 0);
+    h = hear(1.5);
+    check("the HD back: HD again within a second, no waiting time", b.status().state == HD && !b.status().silent && h.analog == 0 && b.status().toHd == 1);
+    // a 13 s dropout: after 10 s of silence the analog is given back; the HD returns after 5 s good
+    hear(1.0); dropFrom = aW; dropTo = aW + 13 * RATE;
+    h = hear(9.0);
+    check("9 s without HD: still silence", b.status().silent && h.analog == 0);
+    h = hear(3.5);
+    check("10 s without HD: the other station's analog is given back (safety net)", !b.status().silent && !b.status().alone && h.analog > 0 && b.status().toAnalog == 1 && b.status().state == ANALOG);
+    h = hear(4.0);                                 // the HD has been back for ~3.5 s now
+    check("... the HD good for 3.5 s: not yet (5 s needed after the net)", b.status().state == ANALOG && h.hd == 0);
+    hear(3.0);
+    check("... the HD good for 5 s: back on the HD, alone", b.status().state == HD && b.status().alone && b.status().toHd == 2);
+    // the setting "stay on analog": the HD is never put on
+    b.setUnmatchedPlaysHd(false);
+    hear(1.0); h = hear(5.0);
+    check("'stay on analog': the analog plays, the HD never comes", b.status().state == ANALOG && !b.status().alone && h.hd == 0 && h.silent == 0 && h.analog > 4 * RATE);
+    b.setUnmatchedPlaysHd(true);
+    hear(1.5); h = hear(1.0);
+    check("... setting back to 'play the HD': the HD alone again", b.status().state == HD && b.status().alone && h.analog == 0);
+    // the contest is over: back to the analog, then the ordinary ALIGNED blend
+    al.state = 2; al.offsetFrames = OFF; al.accepted = 9; al.gainDb = 0;
+    b.setAnalogForeign(false);
+    hear(0.7);
+    check("contest over: fades back to the analog", b.status().state == ANALOG || b.status().state == TO_HD);
+    hear(4.0); h = hear(1.0);
+    check("... and from there the ordinary aligned blend", b.status().state == HD && b.status().aligned && !b.status().alone && h.analog == 0 && h.silent < 10);
+    // foreign while the ALIGNED HD is playing: it stays, a dropout gives silence
+    b.setAnalogForeign(true); al.state = 3;
+    h = hear(1.0);
+    check("foreign while the aligned HD plays: the HD stays on (no fade)", b.status().state == HD && b.status().alone && h.analog == 0 && h.mixed == 0);
+    dropFrom = aW + RATE / 2; dropTo = dropFrom + 2 * RATE;
+    h = hear(4.0);
+    // (The aligned HD plays 2.5 s behind live. When its dropout comes up, the HD at the live
+    //  position is already good again - so the silence is a moment, and the HD goes on from
+    //  there, unaligned. Third silence of this test: 3 s, 13 s, and this one.)
+    check("... and its dropout is a moment of silence, then the live HD - never the analog",
+          h.analog == 0 && h.silent > 100 && b.status().silences == 3 && b.status().state == HD && !b.status().aligned);
+    // the HD decoder is switched off for 6 s (Analog only and back): no stale HD from the ring
+    hear(2.0);
+    { static std::vector<float> an(2048 * 2, 1000.0f / 32767.0f);
+      for (int k = 0; k < 6 * RATE / 2048; k++) { b.pushAnalog(an.data(), 2048); aW += 2048; }   // analog goes on, no HD comes
+      b.restart();
+      long long stale = 0; size_t got;
+      for (int k = 0; k < 10; k++) { b.pushAnalog(an.data(), 2048); aW += 2048; got = b.read(out.data(), 2048, 0, al);
+          for (size_t i = 0; i < got; i++) if (out[2 * i] != 0 && out[2 * i] != 1000) stale++; }
+      check("the HD decoder off for 6 s: nothing old is played from the ring (silence)", stale == 0 && b.status().silent); }
+    h = hear(1.5);
+    check("... and the HD is back as soon as it really arrives again", b.status().state == HD && b.status().alone && h.analog == 0);
+    b.setAnalogForeign(false); b.setUnmatchedPlaysHd(false);
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails;
 }
