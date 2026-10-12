@@ -507,6 +507,16 @@
                     android:textIsSelectable="true"
                     android:textSize="12sp"
                     android:visibility="gone" />
+
+                <!-- Build 12: the speed test (shown with the debug text). Its progress and
+                     result appear at the end of the debug text above. -->
+                <Button
+                    android:id="@+id/speed_test"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/speed_test"
+                    android:visibility="gone" />
             </LinearLayout>
         </ScrollView>
 

@@ -33,15 +33,41 @@ example of driving the engine outside Android.
   what build 8 played.
 - `UNMATCHED=hd` the app's own default for "If the HD signal is another station's": play it
   anyway. (Not set = stay on the analog, as every test before build 9 ran.)
+- `SPEEDTEST=5` presses the app's "Run speed test" button 5 s into the run and prints the
+  result at the end (see "What does the radio cost" below).
 - arguments: frequency in Hz, source (`0` Digital only, `1` Analog only, `2` Auto), seconds,
   then optional events `t:prog:N` (switch to program N at t seconds; 0 = HD1) and `t:src:N`.
 
 It prints one status line every 0.25 s (sync, alignment, blend state) plus the app's own log lines.
 The columns `hd on 7% demod 5%` are the two loads the app shows in its signal details: the
-time nrsc5 and the FM demodulator take, in % of real time (`hd rest` / `hd look` = the HD
-search is resting / taking a look). The last line, `COST over ...`, is their average over
-the run and the processor time of the whole harness - the figure to compare before and
+processor time nrsc5 and the FM demodulator take, in % of real time (`hd rest` / `hd look` =
+the HD search is resting / taking a look). The last line, `COST over ...`, is their average
+over the run and the processor time of the whole harness - the figure to compare before and
 after a change that is meant to save battery.
+
+### What does the radio cost: the "% CPU" lines and the speed test
+
+On a PC the two loads are a fair measure of work. **On a phone they are not**: a phone has
+fast and slow cores and changes their clock speed all the time, so the same code reads
+"10 %" on a fast core flat out and "40 %" on a slow core clocked down (seen with build 9).
+Since build 12 the loads are the thread's own processor time (before: time on the wall
+clock), and the app's signal details say which core the engine ran on and at what speed -
+that explains the figure, it does not make it comparable.
+
+To compare two builds on a phone, use the **speed test** (debug info -> "Run speed test";
+here: `SPEEDTEST=5`). It records 10 s of the station being played and then runs a fresh FM
+demodulator and a fresh HD decoder over the recording flat out, three times each, on a
+thread of its own. A thread that never pauses gets a fast core at full speed, and the best
+of three runs counts, so the answer is the same every time:
+
+    Speed test: 101.1 MHz, 10.0 s of radio, best of 3 runs
+    FM demodulator: 70.2 ms per second of radio, stereo decoder on 96 % of the time (runs: 78.2 / 70.2 / 73.6)
+    HD decoder, decoding: 72.9 ms per second of radio (in sync for 9.8 s; runs: 75.5 / 83.6 / 72.9)
+
+A station without HD gives `HD decoder, searching: ...` instead (the search costs more than
+the decoding: 190 against 75 ms on the PC these lines come from). Compare like with like:
+the same station, a strong one, the same FM stereo setting. With `SPEEDTEST` the `COST`
+line's "whole harness" figure includes the test's own work.
 
 How it works: `rtl_stub.c` is a fake librtlsdr that "receives" the file, `fftw3.h` is a tiny
 stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI functions with a

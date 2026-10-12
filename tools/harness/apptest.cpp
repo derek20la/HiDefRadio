@@ -11,6 +11,9 @@
 //   IQLOOP=1 = play the recording round and round (rtl_stub.c)
 //   OWNER="KDSC 19C2" = what the app remembers from the saved logo of this frequency: the HD
 //                  station's name and its own RDS code ("KDSC" alone = the code is not known)
+//   SPEEDTEST=5 = start the app's speed test (build 12: the "Run speed test" button) 5 s into
+//                  the run and print its result at the end. It needs 10 more seconds of the
+//                  recording; the "whole harness" figure of the COST line then includes it.
 //   events: "t:prog:N" = select program N (0 = HD1) at t seconds;  "t:src:N" = change the audio source
 // Prints one line per 0.25 s with the keys of interest from getSignalNative(), and at the end
 // what the run cost: the two loads the app shows in its signal details (demod, HD decode),
@@ -101,6 +104,11 @@ int main(int argc, char **argv) {
             printf("%7.2f  >>> %s %d\n", t, e.what.c_str(), e.n);
         }
         if (t >= nextAlign) { nextAlign += 2.0; J(measureAlignmentNative)(E, nullptr); }   // Kotlin's alignWatcher
+        static bool speedStarted = false;           // SPEEDTEST=5: press the button once, at 5 s
+        if (getenv("SPEEDTEST") && !speedStarted && t >= atof(getenv("SPEEDTEST"))) {
+            speedStarted = true;
+            printf("%7.2f  >>> speed test: %d (0 = started)\n", t, (int)J(startSpeedTestNative)(E, nullptr));
+        }
         loadTicks += 1; loadFm += g_fmLoadPct.load(); loadHd += g_hdLoadPct.load(); lastT = t;
         if (g_hdRest.load() == hdsearch::RESTING) restTicks += 1;
         if (t >= nextPrint) {
@@ -159,6 +167,16 @@ int main(int argc, char **argv) {
             tick(now());
         }
         run = false; reader.join();
+    }
+    if (getenv("SPEEDTEST")) {
+        // The speed test works on its own thread: say how it is getting on, wait, print the result.
+        std::string last;
+        for (int waited = 0; J(isSpeedTestBusyNative)(&env, nullptr) == JNI_TRUE && waited < 3000; waited++) {
+            std::string now = str(J(getSpeedTestNative)(&env, nullptr));
+            if (now != last) { printf("%s\n", now.c_str()); last = now; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        printf("---- speed test ----\n%s\n----\n", str(J(getSpeedTestNative)(&env, nullptr)).c_str());
     }
     J(stopStreamNative)(&env, nullptr);
     J(closeDongleNative)(&env, nullptr);

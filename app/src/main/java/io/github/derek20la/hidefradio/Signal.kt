@@ -52,6 +52,13 @@ data class Signal(
     val fmPilotPct: Float,
     val fmStereoPct: Int,
     val hdLoadPct: Int,       // 11d: nrsc5's decode time, % of real time
+    // Build 12: where the engine's thread ran in the last second. The two loads above are
+    // processor TIME, and the same work takes several times longer on a slow core clocked
+    // down than on a fast one flat out - so they only mean something next to these.
+    // -1 = the phone doesn't say.
+    val cpuCore: Int,         // which core (0, 1, 2 ...)
+    val cpuMhz: Int,          // that core's clock speed, MHz
+    val cpuMaxMhz: Int,       // the top speed of the phone's fastest core, MHz
     // 11d: the blend (blend.hpp), Auto only.
     val blendState: String,   // "analog", "toHd", "hd", "toAnalog"; "sub" = a sub-channel plays live; "off" = not Auto
     val blendAligned: Boolean,    // the HD (when it plays) is time-aligned with the analog
@@ -232,6 +239,9 @@ data class Signal(
                 fmPilotPct = float("fmPilotPct", 0f),
                 fmStereoPct = long("fmStereoPct", 0).toInt(),
                 hdLoadPct = long("hdLoadPct", 0).toInt(),
+                cpuCore = long("cpuCore", -1).toInt(),                 // build 12
+                cpuMhz = long("cpuMhz", -1).toInt(),
+                cpuMaxMhz = long("cpuMaxMhz", -1).toInt(),
                 blendState = str("blendState").ifEmpty { "off" },     // 11d
                 blendAligned = bool("blendAligned"),
                 blendMismatch = bool("blendMismatch"),

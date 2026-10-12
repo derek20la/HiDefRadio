@@ -10,6 +10,10 @@
 #include <algorithm>       // std::min
 #include <cctype>          // std::isalnum, std::toupper (14b step 4)
 #include <deque>           // std::deque - recent album art (9d step 3)
+#include <memory>          // std::unique_ptr (build 12: the speed test's own demodulator)
+#include <cstdio>          // fopen / fscanf (build 12: reading the core's clock speed)
+#include <time.h>          // clock_gettime (build 12: the thread's own processor time)
+#include <sched.h>         // sched_getcpu (build 12: which core is this thread on?)
 #include <android/log.h>   // __android_log_print -> Logcat
 
 #include "rtl-sdr.h"       // librtlsdr (with our rtlsdr_open_fd patch)
@@ -333,8 +337,73 @@ static ident::Judge g_ident;
 static std::atomic<int> g_contest{ident::CONTEST_NONE};
 static std::atomic<bool> g_foreign{false};
 
-static std::atomic<int> g_fmLoadPct{0};                   // demodulator CPU time, % of real time
-static std::atomic<int> g_hdLoadPct{0};                   // 11d: nrsc5's own decode time, % of real time (for comparison)
+static std::atomic<int> g_fmLoadPct{0};                   // demodulator: processor time, % of real time
+static std::atomic<int> g_hdLoadPct{0};                   // 11d: nrsc5's own decode, the same measure (for comparison)
+
+// ---- Build 12: what "N % CPU" means, and what it does not ----
+// Until build 11 the two loads were ELAPSED time: the clock on the wall before and after the
+// work, divided by the length of the block. That also counts the moments in which Android
+// took the processor away from this thread to run something else.
+//
+// Now it is the thread's own PROCESSOR time (CLOCK_THREAD_CPUTIME_ID): only the time this
+// thread really sat on a core.
+//
+// It is still NOT a measure of work, and the screen must not pretend it is. A phone has fast
+// and slow cores and changes each core's clock speed many times a second to save power. The
+// same work takes three to five times longer on a slow core at a low speed than on a fast
+// core flat out - seen on the phone with build 9: "demod 10 %" while the HD search kept the
+// thread busy, "demod 30-50 %" with the SAME code once the search rested and the phone
+// moved the lightly loaded thread to a slow core. So next to the figure the engine now says
+// where the thread was: which core, at what speed, and how fast the fastest core can go
+// (g_cpuCore, g_cpuMhz, g_cpuMaxMhz).
+//
+// To compare two builds, use the SPEED TEST further down: it runs the same work flat out,
+// which makes the phone use a fast core at full speed, and so gives the same figure every time.
+static double threadCpuMs() {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0;
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
+// One number from a file under /sys/devices/system/cpu/ (kHz for the cpufreq files);
+// -1 = not there / not allowed (then the screen simply leaves the line out).
+static long readCpuNumber(int core, const char *file) {
+    char path[96];
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/%s", core, file);
+    FILE *f = fopen(path, "r");
+    if (f == nullptr) return -1;
+    long v = -1;
+    if (fscanf(f, "%ld", &v) != 1) v = -1;
+    fclose(f);
+    return v;
+}
+
+// The core the calling thread is on right now and that core's clock speed (MHz; -1 = unknown).
+static void whereAmI(int &core, int &mhz) {
+    core = sched_getcpu();
+    long khz = core >= 0 ? readCpuNumber(core, "cpufreq/scaling_cur_freq") : -1;
+    mhz = khz > 0 ? (int)(khz / 1000) : -1;
+}
+
+// The top speed of the fastest core (MHz; -1 = unknown). Looked up once.
+static int fastestCoreMhz() {
+    static std::atomic<int> best{0};                 // 0 = not looked up yet
+    int b = best.load();
+    if (b != 0) return b;
+    long top = -1;
+    for (int c = 0; c < 64; c++) {
+        long khz = readCpuNumber(c, "cpufreq/cpuinfo_max_freq");
+        if (khz < 0 && c >= 8) break;                // (a core that is switched off has no file; look at 8 at least)
+        if (khz > top) top = khz;
+    }
+    b = top > 0 ? (int)(top / 1000) : -1;
+    best = b;
+    return b;
+}
+
+static std::atomic<int> g_cpuCore{-1};                    // the streaming thread's core (the last block's)
+static std::atomic<int> g_cpuMhz{-1};                     // ... and its clock speed, averaged over ~1 s
+static std::atomic<int> g_cpuMaxMhz{-1};                  // the fastest core's top speed
 
 // 9i: the two loads above are averaged over ~1 s of samples (about 11 blocks).
 // One 88 ms block on its own jumped around too much (5 % one second, 26 % the
@@ -354,6 +423,25 @@ struct LoadMeter {
     }
 };
 static LoadMeter g_fmLoad, g_hdLoad;
+
+// Build 12: the same ~1 s averaging for "where was the thread" (streaming thread only).
+struct CoreMeter {
+    double mhzSum = 0, blockMs = 0; int blocks = 0;
+    void reset() { mhzSum = blockMs = 0; blocks = 0; }
+    void add(double block) {
+        int core, mhz;
+        whereAmI(core, mhz);
+        if (mhz > 0) { mhzSum += mhz; blocks++; }
+        blockMs += block;
+        if (blockMs >= 1000.0) {
+            g_cpuCore = core;
+            g_cpuMhz = blocks > 0 ? (int)(mhzSum / blocks + 0.5) : -1;
+            g_cpuMaxMhz = fastestCoreMhz();
+            reset();
+        }
+    }
+};
+static CoreMeter g_coreMeter;
 
 // ---- M11 (11c): analog <-> HD alignment ----
 // The aligner gets a copy of BOTH audio streams (analog from demodAnalog, HD1
@@ -564,7 +652,7 @@ static void clearAudio() {
 
 // Streaming thread: demodulate one block of samples and queue the audio.
 static void demodAnalog(const unsigned char *buf, uint32_t len) {
-    Clock::time_point t0 = Clock::now();
+    const double cpu0 = threadCpuMs();               // build 12: this thread's processor time, not the wall clock
     g_fm.setStereoMode(g_stereoMode.load());         // 11b: the setting (changed from the engine thread)
     g_fm.setDeemphasis(g_deemphUs.load());           // 11b step 2: the region's de-emphasis
     g_fm.processCu8(buf, len);
@@ -634,9 +722,9 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
     }
     applyIdentity();                                  // (outside g_rdsMutex)
     if (g_audioSource.load() == SOURCE_ANALOG) g_audioCv.notify_one();
-    // Load: time spent here vs the time this block of samples represents.
+    // Load: processor time spent here vs the time this block of samples represents.
     double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
-    double usedMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    double usedMs = threadCpuMs() - cpu0;
     if (blockMs > 0) g_fmLoad.add(usedMs, blockMs, g_fmLoadPct);   // 9i: 1 s average
 }
 
@@ -1113,11 +1201,251 @@ static void forgetHdStatus() {
     g_pictureGen++;                      // tells Kotlin "pictures changed"
 }
 
+// ---- Build 12: one lock around every nrsc5 open and close ----
+// nrsc5_open_pipe and nrsc5_close make and destroy FFTW "plans", and FFTW's planner may be
+// used by one thread at a time only. Until build 11 that was true by itself: at any moment
+// only one thread opened or closed the decoder. The speed test below opens decoders of its
+// own on its own thread, so every open and every close now goes through these two.
+// (Running two decoders side by side is fine - each has its own plans and its own state.)
+static std::mutex g_hdOpenMutex;                          // LEAF lock: nothing else is taken inside
+static int hdOpenPipe(nrsc5_t **st) {
+    std::lock_guard<std::mutex> lock(g_hdOpenMutex);
+    return nrsc5_open_pipe(st);
+}
+static void hdClose(nrsc5_t *st) {
+    std::lock_guard<std::mutex> lock(g_hdOpenMutex);
+    nrsc5_close(st);
+}
+
+// ---- Build 12: the speed test ("how much work is one second of radio?") ----
+// Why: the "N % CPU" figures on the screen depend on which core the phone happens to use and
+// how fast it clocks it (see LoadMeter), so they cannot say whether one build is cheaper than
+// another. This can. It records ten seconds of the station being played, and then - on a
+// thread of its own, while the radio plays on - runs the two expensive parts over that
+// recording as fast as the phone will go:
+//   1. the FM demodulator (fmdemod.hpp, with stereo and RDS), a fresh one;
+//   2. the HD decoder (nrsc5), a fresh one from a cold start.
+// A thread that never pauses is moved to a fast core and that core is clocked up to full
+// speed within a fraction of a second; each part is run three times and the BEST run counts,
+// so the warm-up and anything else the phone was doing drop out. The result is "milliseconds
+// of processor time per second of radio" (10 ms per second = 1 % of that core) - the same
+// figure every time for the same code on the same kind of station.
+//
+// The HD decoder's time is split by what it was doing: DECODING (blocks during which it was
+// in sync from start to end) and SEARCHING (not in sync at either end). A station with HD
+// gives the first, a station without HD the second - the search is the costlier of the two.
+//
+// For a fair before / after: the same station, a strong one, and the same HD Radio and FM
+// stereo settings both times (stereo costs the demodulator a second filter; the result line
+// says which it was). Nothing here touches the radio that is playing: the test has its own
+// demodulator and its own decoders, and only READS the samples.
+namespace bench {
+const double SECONDS = 10.0;                              // length of the recording (30 MB)
+const int RUNS = 3;                                       // each part this often; the best counts
+const double ENOUGH_S = 3.0;                              // a figure needs this much radio behind it
+enum { IDLE = 0, RECORDING, RUNNING, DONE };
+}
+static std::atomic<int> g_benchState{bench::IDLE};
+static std::atomic<int> g_benchStep{0};                   // RUNNING: which of the 2 x RUNS runs is on
+static std::mutex g_benchMutex;                           // LEAF lock: the recording and the result text
+static std::vector<unsigned char> g_benchIq;              // the recording (streaming thread writes while RECORDING,
+static size_t g_benchFill = 0;                            //   the test's thread reads while RUNNING)
+static size_t g_benchBlock = 0;                           // the size of the dongle's blocks (bytes)
+static int g_benchHz = 0;                                 // what was recorded: the frequency ...
+static int g_benchMode = NRSC5_MODE_FM;                   // ... and FM or AM
+static std::string g_benchText;                           // the result (DONE)
+
+// Streaming thread, every block: while a test is recording, keep a copy of the samples.
+static void benchRecord(const unsigned char *buf, uint32_t len) {
+    if (g_benchState.load() != bench::RECORDING) return;  // (the usual case: one atomic read)
+    std::lock_guard<std::mutex> lock(g_benchMutex);
+    if (g_benchState.load() != bench::RECORDING || g_benchIq.empty()) return;
+    if (g_benchFill == 0) g_benchBlock = len;
+    size_t n = std::min((size_t)len, g_benchIq.size() - g_benchFill);
+    std::copy(buf, buf + n, g_benchIq.begin() + (std::ptrdiff_t)g_benchFill);
+    g_benchFill += n;
+    if (g_benchFill >= g_benchIq.size()) {
+        g_benchHz = g_tunedHz.load();
+        g_benchMode = g_mode;
+        g_benchStep = 0;
+        g_benchState = bench::RUNNING;                    // full: over to the test's thread
+    }
+}
+
+// What the test's own HD decoder reports (its thread only).
+struct BenchHd {
+    bool synced = false;
+    int syncs = 0;
+    long audioFrames = 0;                                 // HD1 audio that came out
+};
+static void benchHdEvent(const nrsc5_event_t *evt, void *opaque) {
+    BenchHd *b = (BenchHd *)opaque;
+    if (evt->event == NRSC5_EVENT_SYNC) { b->synced = true; b->syncs++; }
+    else if (evt->event == NRSC5_EVENT_LOST_SYNC) b->synced = false;
+    else if (evt->event == NRSC5_EVENT_AUDIO && evt->audio.program == 0) b->audioFrames += (long)(evt->audio.count / 2);
+}
+
+// "38.2 / 38.9 / 40.1" - all the runs, so one can see how well they agree.
+static std::string benchRuns(const double *ms, int n) {
+    std::string out;
+    char num[32];
+    for (int i = 0; i < n; i++) {
+        snprintf(num, sizeof(num), "%s%.1f", i ? " / " : "", ms[i]);
+        out += num;
+    }
+    return out;
+}
+
+// The test's own thread.
+static void benchMain() {
+    // 1. Wait for the recording. (The radio was stopped meanwhile? Give up after a while.)
+    for (int waitedMs = 0; g_benchState.load() == bench::RECORDING; waitedMs += 50) {
+        if (waitedMs > (int)(bench::SECONDS * 1000) + 20000) {
+            std::lock_guard<std::mutex> lock(g_benchMutex);
+            if (g_benchState.load() != bench::RECORDING) break;       // it filled up this very moment
+            std::vector<unsigned char>().swap(g_benchIq);              // give the memory back
+            g_benchText = "Speed test: the recording did not finish - is the radio playing? Try again.";
+            g_benchState = bench::DONE;
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    // From here the recording is ours alone (the streaming thread only writes while RECORDING).
+    const unsigned char *iq = g_benchIq.data();
+    const size_t total = g_benchIq.size() & ~(size_t)1;
+    const size_t block = g_benchBlock >= 2 ? (g_benchBlock & ~(size_t)1) : 262144;
+    const double radioS = (double)total / 2.0 / SAMPLE_RATE;
+    const bool fm = g_benchMode == NRSC5_MODE_FM;
+    double mhzSum = 0; int mhzCount = 0, core = -1;       // where this thread ran
+    auto note = [&] { int c, m; whereAmI(c, m); core = c; if (m > 0) { mhzSum += m; mhzCount++; } };
+
+    // 2. The FM demodulator.
+    double fmMs[bench::RUNS] = {0};
+    double fmBest = -1;
+    // Stereo costs the demodulator a second filter (the L-R path), and that path runs
+    // whenever any stereo is playing - also while the blend holds it at 20 %. So what the
+    // result must say is for how much of the recording it ran, not how wide the stereo was.
+    int stereoPct = 0;
+    bool pilot = false;
+    if (fm) {
+        for (int run = 0; run < bench::RUNS; run++) {
+            g_benchStep = run + 1;
+            std::unique_ptr<fm::Demod> d(new fm::Demod());
+            d->setStereoMode(g_stereoMode.load());
+            d->setDeemphasis(g_deemphUs.load());
+            int blocks = 0, stereoBlocks = 0;
+            const double c0 = threadCpuMs();
+            for (size_t at = 0; at < total; at += block) {
+                d->processCu8(iq + at, std::min(block, total - at));
+                d->audioOut.clear();
+                blocks++;
+                if (d->stereoAmount() > 0.f) stereoBlocks++;
+            }
+            fmMs[run] = (threadCpuMs() - c0) / radioS;
+            if (fmBest < 0 || fmMs[run] < fmBest) fmBest = fmMs[run];
+            stereoPct = blocks > 0 ? (int)(100.0 * stereoBlocks / blocks + 0.5) : 0;
+            pilot = d->pilot();
+            note();
+        }
+    }
+
+    // 3. The HD decoder: a fresh one each run, timed block by block.
+    double decMs[bench::RUNS] = {0}, seaMs[bench::RUNS] = {0}, allMs[bench::RUNS] = {0};
+    double decS = 0, seaS = 0;                            // seconds of radio behind the two figures
+    double decBest = -1, seaBest = -1, allBest = -1;
+    BenchHd hd;
+    bool opened = true;
+    for (int run = 0; run < bench::RUNS && opened; run++) {
+        g_benchStep = bench::RUNS + run + 1;
+        nrsc5_t *n = nullptr;
+        if (hdOpenPipe(&n) != 0 || n == nullptr) { opened = false; break; }
+        hd = BenchHd();
+        nrsc5_set_mode(n, g_benchMode);
+        nrsc5_set_callback(n, benchHdEvent, &hd);
+        double dec = 0, sea = 0, all = 0, dS = 0, sS = 0;
+        for (size_t at = 0; at < total; at += block) {
+            const size_t len = std::min(block, total - at);
+            const bool before = hd.synced;
+            const double c0 = threadCpuMs();
+            nrsc5_pipe_samples_cu8(n, iq + at, (unsigned int)len);
+            const double used = threadCpuMs() - c0;
+            const double s = (double)len / 2.0 / SAMPLE_RATE;
+            all += used;
+            if (before && hd.synced) { dec += used; dS += s; }
+            else if (!before && !hd.synced) { sea += used; sS += s; }
+        }
+        hdClose(n);
+        decS = dS; seaS = sS;
+        decMs[run] = dS > 0 ? dec / dS : 0;
+        seaMs[run] = sS > 0 ? sea / sS : 0;
+        allMs[run] = all / radioS;
+        if (dS > 0 && (decBest < 0 || decMs[run] < decBest)) decBest = decMs[run];
+        if (sS > 0 && (seaBest < 0 || seaMs[run] < seaBest)) seaBest = seaMs[run];
+        if (allBest < 0 || allMs[run] < allBest) allBest = allMs[run];
+        note();
+    }
+
+    // 4. The result, in words.
+    char line[320];
+    std::string out;
+    if (fm) snprintf(line, sizeof(line), "Speed test: %.1f MHz, %.1f s of radio, best of %d runs\n", g_benchHz / 1e6, radioS, bench::RUNS);
+    else snprintf(line, sizeof(line), "Speed test: %d kHz AM, %.1f s of radio, best of %d runs\n", g_benchHz / 1000, radioS, bench::RUNS);
+    out += line;
+    if (fm) {
+        char what[64];
+        if (stereoPct > 0) snprintf(what, sizeof(what), "stereo decoder on %d %% of the time", stereoPct);
+        else snprintf(what, sizeof(what), "%s", g_stereoMode.load() == fm::STEREO_MONO ? "mono (set to mono)"
+                                               : pilot ? "mono (too noisy for stereo)" : "mono (no pilot)");
+        snprintf(line, sizeof(line), "FM demodulator: %.1f ms per second of radio, %s (runs: %s)\n", fmBest,
+                 what, benchRuns(fmMs, bench::RUNS).c_str());
+        out += line;
+    }
+    if (!opened) {
+        out += "HD decoder: could not be opened\n";
+    } else {
+        bool any = false;
+        if (decS >= bench::ENOUGH_S) {
+            snprintf(line, sizeof(line), "HD decoder, decoding: %.1f ms per second of radio (in sync for %.1f s; runs: %s)\n",
+                     decBest, decS, benchRuns(decMs, bench::RUNS).c_str());
+            out += line; any = true;
+        }
+        if (seaS >= bench::ENOUGH_S) {
+            snprintf(line, sizeof(line), "HD decoder, searching: %.1f ms per second of radio (no sync for %.1f s; runs: %s)\n",
+                     seaBest, seaS, benchRuns(seaMs, bench::RUNS).c_str());
+            out += line; any = true;
+        }
+        if (!any) {
+            snprintf(line, sizeof(line), "HD decoder: %.1f ms per second of radio - the sync came and went (%d times), no clean figure (runs: %s)\n",
+                     allBest, hd.syncs, benchRuns(allMs, bench::RUNS).c_str());
+            out += line;
+        }
+    }
+    out += "(10 ms per second of radio = 1 % of the core it ran on)\n";
+    const int top = fastestCoreMhz();
+    if (mhzCount > 0 && top > 0) {
+        const int mhz = (int)(mhzSum / mhzCount + 0.5);
+        snprintf(line, sizeof(line), "Ran on core %d at %d of %d MHz%s", core, mhz, top,
+                 mhz * 10 >= top * 9 ? "." : " - NOT at full speed: is the phone hot or in battery saver? Run it again.");
+        out += line;
+    } else {
+        snprintf(line, sizeof(line), "Ran on core %d (this phone does not tell its clock speed).", core);
+        out += line;
+    }
+    LOGI("%s", out.c_str());
+    {
+        std::lock_guard<std::mutex> lock(g_benchMutex);
+        std::vector<unsigned char>().swap(g_benchIq);     // give the 30 MB back
+        g_benchFill = 0;
+        g_benchText = out;
+        g_benchState = bench::DONE;                       // (the last thing this thread does)
+    }
+}
+
 // Milestone 6: create the nrsc5 decoder in "pipe" mode (we feed it samples).
 // 12a step 3: also when the HD is switched back on in the middle of a stream (on the
 // streaming thread then - the only thread that feeds nrsc5). False = it failed.
 static bool openHd() {
-    if (nrsc5_open_pipe(&g_nrsc5) != 0 || g_nrsc5 == nullptr) {
+    if (hdOpenPipe(&g_nrsc5) != 0 || g_nrsc5 == nullptr) {
         g_nrsc5 = nullptr;
         LOGE("nrsc5_open_pipe failed");
         return false;
@@ -1135,6 +1463,7 @@ static bool openHd() {
 // Each sample is 2 bytes: I and Q, each 0..255 with "zero" at 127.5.
 static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
     g_bytes += len;
+    benchRecord(buf, len);                    // build 12: a speed test is recording? (else one atomic read)
 
     // Signal level: RMS distance from the center value, 0 (silence) .. ~128.
     // Just a sanity check that the data is real radio noise/signal, not zeros.
@@ -1169,7 +1498,7 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
             else g_hdOpenFailed = true;
         }
     } else if (g_nrsc5 != nullptr) {
-        nrsc5_close(g_nrsc5);
+        hdClose(g_nrsc5);
         g_nrsc5 = nullptr;
         g_hdOn = false;
         forgetHdStatus();
@@ -1197,7 +1526,7 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
         // The samples start again after a rest: with a fresh decoder (see g_hdSearch above).
         // What the old one told us stays on the screen - the station's HD name, its
         // programs, its logo.
-        nrsc5_close(g_nrsc5);
+        hdClose(g_nrsc5);
         g_nrsc5 = nullptr;
         if (!openHd()) { g_hdOpenFailed = true; g_hdOn = false; }
     }
@@ -1215,10 +1544,11 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
         // 11d: time the HD decode too ("decode N %" next to "demod M %" in the details).
         // (Build 9: a block nrsc5 does not get counts as no time used, so the figure falls
         // to 0 % while the search rests.)
-        Clock::time_point t0 = Clock::now();
+        // Build 12: processor time of this thread, like the demodulator's.
+        const double cpu0 = threadCpuMs();
         if (feedHd) nrsc5_pipe_samples_cu8(g_nrsc5, buf, len);
         double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
-        double usedMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+        double usedMs = threadCpuMs() - cpu0;
         if (blockMs > 0) g_hdLoad.add(usedMs, blockMs, g_hdLoadPct);   // 9i: 1 s average
     }
     g_iqPos += len / 2;
@@ -1236,6 +1566,10 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
         g_idleSlip += g_drift.clock() * (double)(len / 2) / align::IQ_PER_FRAME;
         g_slip = g_stretch.slip() + g_idleSlip;
     }
+    // Build 12: which core, how fast - read at the END of the block's work. The thread
+    // sleeps between blocks and the phone clocks its core up while it works; a reading taken
+    // at the start of the work shows the idle speed, not the speed the work was done at.
+    if (len > 0) g_coreMeter.add(len / 2.0 / SAMPLE_RATE * 1000.0);
 }
 
 // Body of the streaming thread. rtlsdr_read_async() only returns when
@@ -1361,6 +1695,11 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_tunedHz = (int)freqHz;
     g_hdLoadPct = 0;
     g_hdLoad.reset();                        // 9i
+    g_coreMeter.reset();                     // build 12
+    if (g_benchState.load() == bench::RECORDING) {      // build 12: a speed test was recording the old
+        std::lock_guard<std::mutex> lock(g_benchMutex);   // station - it starts over with this one
+        g_benchFill = 0;
+    }
     g_iqPos = 0;
     // 12a step 3: the HD decoder only if it can be heard (not in Analog only); onSamples
     // opens / closes it later when the setting changes.
@@ -1399,7 +1738,7 @@ static void stopStreaming() {
 
     // Streaming has stopped, so nobody is feeding nrsc5 any more -> safe to close.
     if (g_nrsc5 != nullptr) {
-        nrsc5_close(g_nrsc5);
+        hdClose(g_nrsc5);
         g_nrsc5 = nullptr;
         LOGI("nrsc5_close()");
     }
@@ -1692,6 +2031,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
              g_direct.load() ? 1 : 0,                  // 14c: direct sampling (no tuner gain)
              src == SOURCE_ANALOG ? "analog" : src == SOURCE_AUTO ? "auto" : "hd", demodWanted() ? 1 : 0,
              g_fmCarrierDb.load(), g_fmQuietDb.load(), g_fmOffsetHz.load(), g_fmLoadPct.load(), g_hdLoadPct.load());
+    out += buf;
+    // Build 12: where the streaming thread ran in the last second - its core, that core's
+    // clock speed and the fastest core's top speed (MHz; -1 = the phone doesn't say).
+    snprintf(buf, sizeof(buf), "cpuCore=%d\ncpuMhz=%d\ncpuMaxMhz=%d\n", g_cpuCore.load(), g_cpuMhz.load(), g_cpuMaxMhz.load());
     out += buf;
     // 11b: stereo. fmStereoMode = the setting (auto / mono / stereo); fmPilot = a 19 kHz
     // pilot is there; fmPilotPct = its level in % of 75 kHz (stations send 8-10);
@@ -2133,6 +2476,55 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
     }
     LOGI("Alignment: no match (r %.3f%s; HD audio there: %.0f %%)", r.corr, r.usedHint ? ", near the expected value" : ", full search", r.hdCover * 100.0f);
     return 2;
+}
+
+// Kotlin (RadioEngine): external fun startSpeedTestNative(): Int - build 12.
+// Starts the speed test (see "the speed test" above): 10 s of recording, then some seconds
+// of work on its own thread; the radio plays on. Returns at once:
+// 0 = started, 1 = one is already under way, 2 = the radio is not playing.
+extern "C" JNIEXPORT jint JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_startSpeedTestNative(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(g_benchMutex);
+    const int state = g_benchState.load();
+    if (state == bench::RECORDING || state == bench::RUNNING) return 1;
+    if (!g_streaming.load()) return 2;
+    // (IDLE or DONE: the last test's thread has done its last step, nobody uses the buffer.)
+    g_benchIq.assign((size_t)(bench::SECONDS * SAMPLE_RATE) * 2, 0);
+    g_benchFill = 0;
+    g_benchText.clear();
+    g_benchState = bench::RECORDING;
+    std::thread(benchMain).detach();          // it ends by itself, with state DONE
+    return 0;
+}
+
+// Kotlin (RadioEngine): external fun getSpeedTestNative(): String - build 12.
+// "" = no test yet; else the progress ("recording 4 of 10 s", "working, step 2 of 6") or
+// the result (several lines).
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_getSpeedTestNative(JNIEnv* env, jobject) {
+    char line[160];
+    std::lock_guard<std::mutex> lock(g_benchMutex);
+    switch (g_benchState.load()) {
+        case bench::RECORDING:
+            snprintf(line, sizeof(line), "Speed test: recording this station, %.0f of %.0f s...",
+                     (double)g_benchFill / 2.0 / SAMPLE_RATE, bench::SECONDS);
+            return env->NewStringUTF(line);
+        case bench::RUNNING:
+            snprintf(line, sizeof(line), "Speed test: working, step %d of %d... (the radio plays on)",
+                     std::max(1, g_benchStep.load()), 2 * bench::RUNS);
+            return env->NewStringUTF(line);
+        case bench::DONE:
+            return env->NewStringUTF(g_benchText.c_str());
+        default:
+            return env->NewStringUTF("");
+    }
+}
+
+// Kotlin (RadioEngine): external fun isSpeedTestBusyNative(): Boolean - build 12 (greys the button).
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_isSpeedTestBusyNative(JNIEnv*, jobject) {
+    const int state = g_benchState.load();
+    return state == bench::RECORDING || state == bench::RUNNING ? JNI_TRUE : JNI_FALSE;
 }
 
 // Tests only (the desktop harness; the app never calls it): clock correction on / off.

@@ -104,6 +104,7 @@ class MainActivity : AppCompatActivity() {
             val service = RadioService.instance
             if (service != null) {
                 showDebug(service.statusText())
+                showSpeedTestBusy()                // build 12
                 message = ""
                 wasRunning = true
             } else if (wasRunning) {
@@ -1047,6 +1048,9 @@ class MainActivity : AppCompatActivity() {
             else -> String.format(Locale.US, "stereo %d %%, pilot %.1f %%", s.fmStereoPct, s.fmPilotPct)
         }
         // 11d: the HD decode's own CPU time next to the demodulator's, for comparison.
+        // Build 12: both are processor time now, and a last line says on which core and at
+        // what speed - the same work shows as a much bigger % on a slow core clocked down
+        // (to compare two builds, use the speed test in the debug info instead).
         return listOf("Analog" to "$carrier, offset ${s.fmOffsetHz} Hz\n" +
                                   "$stereo\n" +
                                   "demod ${s.fmLoadPct} % CPU, HD decode " +
@@ -1054,7 +1058,17 @@ class MainActivity : AppCompatActivity() {
                                       !s.hdOn -> "off"                                // 12a step 3
                                       s.hdSearch == "rest" -> "resting"               // build 9
                                       else -> "${s.hdLoadPct} %"
-                                  })
+                                  } + cpuLine(s))
+    }
+
+    /**
+     * Build 12: "\non core 2 at 0.61 GHz (fastest core: 2.21 GHz)" - where the engine's thread
+     * ran in the last second; "" when the phone doesn't say.
+     */
+    private fun cpuLine(s: Signal): String {
+        if (s.cpuCore < 0 || s.cpuMhz <= 0) return ""
+        val top = if (s.cpuMaxMhz > 0) String.format(Locale.US, " (fastest core: %.2f GHz)", s.cpuMaxMhz / 1000f) else ""
+        return String.format(Locale.US, "\non core %d at %.2f GHz%s", s.cpuCore, s.cpuMhz / 1000f, top)
     }
 
     /**
@@ -1223,11 +1237,26 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_DEBUG_OPEN, debugOpen).apply()
             showDebugOpen()
         }
+        // Build 12: the speed test (RadioEngine.startSpeedTestNative). It returns at once;
+        // the progress and the result appear in the debug text, which refreshes every second.
+        binding.speedTest.setOnClickListener {
+            val answer = if (RadioService.instance == null) 2 else RadioEngine.startSpeedTestNative()
+            if (answer == 2) Toast.makeText(this, R.string.speed_test_no_radio, Toast.LENGTH_SHORT).show()
+            showSpeedTestBusy()
+        }
     }
 
     private fun showDebugOpen() {
         binding.sampleText.visibility = if (debugOpen) View.VISIBLE else View.GONE
+        binding.speedTest.visibility = if (debugOpen) View.VISIBLE else View.GONE      // build 12
         binding.debugToggle.setText(if (debugOpen) R.string.hide_debug else R.string.show_debug)
+        showSpeedTestBusy()
+    }
+
+    /** Build 12: the speed test's button is grey while a test is under way. */
+    private fun showSpeedTestBusy() {
+        if (!debugOpen) return
+        binding.speedTest.isEnabled = !RadioEngine.isSpeedTestBusyNative()
     }
 
     // ------------------------------------------------------------------ sticky header (9g)

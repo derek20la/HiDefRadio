@@ -23,6 +23,9 @@
     <string name="enter_frequency_message">FM in MHz (e.g. 101.1) or AM in kHz (e.g. 1260)</string>
     <string name="show_debug">Show debug info</string>
     <string name="hide_debug">Hide debug info</string>
+    <!-- Build 12: the speed test button in the debug info -->
+    <string name="speed_test">Run speed test</string>
+    <string name="speed_test_no_radio">Start the radio first</string>
     <string name="signal_off">Radio off</string>
     <string name="signal_searching">Searching for HD… %1$s</string>
     <string name="signal_searching_am">AM is HD only - searching for the digital signal… %1$s</string>   <!-- 9c -->

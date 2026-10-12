@@ -179,4 +179,20 @@ object RadioEngine {
      * (Signal.alignState etc.) and Logcat ("Alignment: ...").
      */
     external fun measureAlignmentNative(): Int
+
+    /**
+     * Build 12: the speed test - "how much work is one second of radio on this phone?".
+     * Records 10 s of the station being played, then runs the FM demodulator and the HD
+     * decoder over that recording flat out on a thread of its own (the radio plays on).
+     * Flat out, the phone uses a fast core at full speed, so the result is the same every
+     * time - which the "N % CPU" lines in the signal details are not. Returns at once:
+     * 0 = started, 1 = one is already under way, 2 = the radio is not playing.
+     */
+    external fun startSpeedTestNative(): Int
+
+    /** Build 12: "" = no speed test yet; else its progress, or its result (several lines). */
+    external fun getSpeedTestNative(): String
+
+    /** Build 12: a speed test is recording or working right now. */
+    external fun isSpeedTestBusyNative(): Boolean
 }

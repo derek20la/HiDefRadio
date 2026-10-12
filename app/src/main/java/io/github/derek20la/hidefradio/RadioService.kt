@@ -24,6 +24,7 @@ import android.media.session.PlaybackState
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -519,6 +520,7 @@ class RadioService : Service() {
     private val gainWatcher = object : Runnable {
         override fun run() {
             watchGain()
+            sampleBattery()                             // build 12 (the same once-a-second tick)
             handler.postDelayed(this, GAIN_TICK_MS)
         }
     }
@@ -976,7 +978,42 @@ class RadioService : Service() {
             "Signal level: %.1f".format(RadioEngine.getSignalLevelNative()) +
             "\n\n" + RadioEngine.getStatusNative() +
             "\n\nAudio: %s, buffer %.1f s, gaps %d, dropped %d".format(
-                audioState, bufferedSec, audioPlayer.underruns, RadioEngine.getAudioDroppedNative())
+                audioState, bufferedSec, audioPlayer.underruns, RadioEngine.getAudioDroppedNative()) +
+            // Build 12: what the radio costs - the battery's current, and the speed test's result.
+            "\n\n" + battery.text() +
+            RadioEngine.getSpeedTestNative().let { if (it.isEmpty()) "" else "\n\n$it" }
+    }
+
+    // ------------------------------------------------------------------ battery current (build 12)
+
+    /** Averages the battery's current (BatteryMeter.kt); fed once a second by [gainWatcher]. */
+    private val battery = BatteryMeter()
+
+    /**
+     * Build 12: one reading of the battery's current for [battery]. Needs no permission.
+     * Runs once a second on the main thread, also with the screen off (the wake lock).
+     */
+    private fun sampleBattery() {
+        try {
+            val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            // The "sticky" battery broadcast: reading it registers nothing (receiver = null).
+            val state = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val level = state?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = state?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+            val percent = if (level >= 0 && scale > 0) level * 100 / scale else -1
+            battery.add(
+                nowMs = SystemClock.elapsedRealtime(),
+                rawCurrent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW),
+                millivolts = state?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0,
+                capacityMah = BatteryMeter.capacityMah(
+                    bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER), percent),
+                screenOn = pm.isInteractive,
+                onExternalPower = (state?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0)
+        } catch (e: Exception) {
+            // A phone that refuses any of this simply gets no battery line.
+            Log.w(TAG, "Battery reading failed: $e")
+        }
     }
 
     // ------------------------------------------------------------------ notification + MediaSession
