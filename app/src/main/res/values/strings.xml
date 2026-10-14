@@ -43,6 +43,9 @@
     <string name="other_hd_listen">⚠ The HD here is %1$s (another station) - tap to listen</string>
     <string name="other_analog_listen">⚠ The analog here is %1$s (another station) - tap to listen</string>
     <string name="other_analog_listen_unnamed">⚠ The analog here is another station - tap to listen</string>
+    <!-- Build 13: the analog is the HD station's own again, but another station was heard here in the last minute -->
+    <string name="two_stations_tap_hd">⚠ Two stations share this frequency - tap for the HD (%1$s)</string>
+    <string name="two_stations_tap_analog">⚠ Two stations share this frequency - tap for the analog</string>
     <!-- Build 10: the HD stands alone (the analog on this frequency is another station's) and has dropped out -->
     <string name="signal_silent">HD dropout - silence (%1$d s)</string>
     <string name="now_image">Album art or station logo</string>

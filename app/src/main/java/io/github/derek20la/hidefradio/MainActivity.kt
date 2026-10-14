@@ -818,6 +818,11 @@ class MainActivity : AppCompatActivity() {
         val other = running && s.otherHd
         if (other) {
             binding.otherHdNotice.text = when {
+                // Build 13: the analog is the HD station's own again, but the other station was heard
+                // less than a minute ago - "another station" would contradict the RDS row.
+                s.ownAnalogBack && s.analog ->
+                    getString(R.string.two_stations_tap_hd, s.hdOtherName.ifEmpty { s.station }.ifEmpty { "HD" })
+                s.ownAnalogBack -> getString(R.string.two_stations_tap_analog)
                 s.analog -> getString(R.string.other_hd_listen, s.hdOtherName.ifEmpty { s.station })
                 s.hdSameCall.isNotEmpty() -> getString(R.string.other_analog_listen, s.hdSameCall)
                 else -> getString(R.string.other_analog_listen_unnamed)
@@ -1105,6 +1110,8 @@ class MainActivity : AppCompatActivity() {
             "sub" -> "sub-channel plays live (no analog to blend with)"
             // Build 10: the analog here is another station's - the HD is on its own.
             "alone" -> if (s.blendSilent) "waiting for the HD (silence) ${s.blendSilentSecs} s"
+                       else if (s.ownAnalogBack)   // build 13
+                           "HD alone for ${s.blendSinceSecs} s - another station was heard here less than a minute ago (silence in dropouts)"
                        else "HD alone for ${s.blendSinceSecs} s - the analog here is another station (silence in dropouts)"
             "hd" -> "HD" + (if (s.blendAligned) "" else " (unaligned)") + " for ${s.blendSinceSecs} s"
             "toHd" -> "fading to HD"
@@ -1157,6 +1164,10 @@ class MainActivity : AppCompatActivity() {
         val ownCode = if (s.hdOwnPi.isNotEmpty()) " (${s.hdOwnPi})" else ""
         val foreignCode = s.rdsPi.takeIf { it.isNotEmpty() && !it.equals(s.hdOwnPi, ignoreCase = true) }
         val same = when {
+            // Build 13: the analog is the HD station's own again; the contest holds for a minute.
+            s.ownAnalogBack ->
+                "\ntwo stations share this frequency - the analog is $hdName's own again$ownCode;" +
+                " the HD plays alone until the other station has been gone for a minute"
             s.hdContest == Signal.HD_CONTEST_CONFIRMED ->
                 "\nthe analog here is " + s.hdSameCall.ifEmpty { "another station" } +
                 (if (foreignCode != null) " (RDS code $foreignCode)" else "") + " - not $hdName$ownCode"

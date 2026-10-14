@@ -47,6 +47,7 @@ No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see com
 ### For radio people
 
 - **Signal details**: sync and service mode, MER per sideband, BER, bit rate, the analog quieting, carrier level and frequency offset, pilot level and stereo amount, the RDS code, the measured analog/HD alignment, what the blend did, tuner gain, peak level (with an overload warning) and the time to sync and to first sound.
+- A **speed test** and a **battery line** (tap "Show debug info" at the bottom of the main screen): the speed test records ten seconds of the station you hear and runs the FM demodulator and the HD decoder over it flat out, then tells you what each costs on your phone, in milliseconds of processor time per second of radio. The battery line shows the current the phone draws, also with the screen off.
 - A **5-bar signal meter** for analog FM that is based on quieting (how far the noise sits below full modulation), not on the carrier level. The carrier level of an RTL-SDR depends on the gain the strongest station in the band sets, so it says little about the station you are tuned to.
 - **Tuner gain**, automatic or manual, applied live. Automatic measures the signal when you tune, then a watchdog keeps adjusting while you listen. It steps down at once on overload and steps up when the signal is weak. The gain that worked is remembered for each station.
 - **FM stereo**: Auto (mono when noisy), Always mono (cuts the hiss of weak DX stations) or Always stereo.
@@ -65,7 +66,7 @@ No internet permission, no ads, no account, no tracking. See the [privacy policy
 - For HD Radio: a station that broadcasts it. HD Radio is on the air in the United States, Canada and Mexico. Elsewhere the app is an analog FM radio with RDS.
 - For AM: a dongle that can tune below 24 MHz. That is the RTL-SDR Blog V4, which has an upconverter built in, or a dongle with a direct-sampling input such as the V3 (expected to work, not confirmed yet).
 
-The dongle is powered by the phone, and on a phone with one USB port you can't charge while it is plugged in. In one test the radio used about 9 % of the battery per hour.
+The dongle is powered by the phone, and on a phone with one USB port you can't charge while it is plugged in. Measured on a Moto G Stylus 2024 with a V4, screen off: about 530 mA, roughly 12 % of the battery per hour. The dongle itself draws about two thirds of that.
 
 ## Get the app
 
@@ -87,7 +88,7 @@ To check a download: the signing certificate's SHA-256 is `0f7ba7ed4584a04293a2a
 
 ### Feedback
 
-Please tell me which phone and dongle you use and what works or doesn't: open an issue here, or write to hidefradioapp@yahoo.com.
+Please tell me which phone and dongle you use and what works or doesn't: open an issue here, or write to hidefradioapp@yahoo.com. The speed test's three numbers and your phone's model help too: they show how much room slower phones have.
 
 ## Building
 
@@ -179,9 +180,9 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 - After every tune you hear about ten seconds of analog before the HD takes over. Measuring the alignment takes that long.
 - In Auto, HD1 plays about 2.5 seconds behind Digital only. That delay is what makes the look-ahead possible.
 - AM is HD only. Analog AM, with the blend, is planned for version 1.1.
-- AM HD has had little on-air testing. The decoding was verified by running off-air recordings of an AM HD station through the app's engine (`tools/harness`), but no AM HD station reaches the place where the app is developed.
+- AM HD has had little on-air testing: one station (KMZT 1260 kHz in Los Angeles) heard on the phone with an RTL-SDR Blog V4, plus off-air recordings run through the app's engine (`tools/harness`). AM with a V3 has not been tried yet.
 - 64-bit ARM phones only.
-- So far it has been tested in the Los Angeles area only, on two phones. Reports from other phones, dongles and places are what the closed test is for.
+- Most testing so far has been in the Los Angeles area. Testers have run it in other places and on other phones and dongles too, and more reports are what the closed test is for.
 
 ## Plans
 

@@ -1798,7 +1798,16 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getStatusNative(JNIEnv* env, job
     out += buf;
     if (st.syncCount == 0) {
         // 9d: "+=" (it used to be "=", which hid the Peak line while searching)
-        snprintf(buf, sizeof(buf), "HD: searching... (%.1f s)", msSinceTune() / 1000.0);
+        // build 13: say so when the search rests (decision 58) - it used to read "searching... (201 s)"
+        // for as long as the station played, although nrsc5 was getting no samples most of that time.
+        const int rest = g_hdRest.load();
+        if (rest == hdsearch::RESTING)
+            snprintf(buf, sizeof(buf), "HD: none found - resting, next look in %d s (%.1f s)",
+                     g_hdLookInS.load(), msSinceTune() / 1000.0);
+        else if (rest == hdsearch::LOOKING)
+            snprintf(buf, sizeof(buf), "HD: none found - looking again... (%.1f s)", msSinceTune() / 1000.0);
+        else
+            snprintf(buf, sizeof(buf), "HD: searching... (%.1f s)", msSinceTune() / 1000.0);
         out += buf;
     } else {
         // 9d: sync state with the grace period, plus the service mode (e.g. MP3).

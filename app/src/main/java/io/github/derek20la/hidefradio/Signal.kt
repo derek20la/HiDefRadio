@@ -157,6 +157,18 @@ data class Signal(
     val otherHd: Boolean
         get() = hdSame == HD_SAME_NO && (alignState == "nomatch" || hdContest == HD_CONTEST_CONFIRMED)
 
+    /**
+     * Build 13: two stations share this frequency, and the analog coming in RIGHT NOW is the HD
+     * station's own again (its RDS code = [hdOwnPi]) - but the contest still holds (decision 59
+     * keeps it for 60 s after the other station's code was last seen). Seen on the air 10-10
+     * (91.1, KDSC + XETRA): without this, the lines said "the analog here is another station"
+     * while the RDS row said KDSC. Each was true of its own moment; read together they
+     * contradicted. Only the WORDING changes with this - what plays doesn't.
+     */
+    val ownAnalogBack: Boolean
+        get() = hdContest == HD_CONTEST_CONFIRMED && hdOwnPi.isNotEmpty() &&
+                rdsPi.equals(hdOwnPi, ignoreCase = true)
+
     /** Build 10: the HD stands alone (the analog here is another station's): it plays, or the silence waits. */
     val blendAlone: Boolean
         get() = blendState == "alone"
