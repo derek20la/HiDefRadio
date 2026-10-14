@@ -105,7 +105,7 @@ Good to know:
 
 - The debug build installs as a separate app, **HiDef Radio dev** (`io.github.derek20la.hidefradio.debug`), so it can sit next to a release install.
 - A release build is signed only if you put a `keystore.properties` file with your own key in the project's root folder. The four lines it needs are described at the top of `app/build.gradle.kts`. That file and the key are git-ignored. Without it everything still builds, and the release build is just not signed.
-- The native code is built for 64-bit ARM only (`abiFilters` in `app/build.gradle.kts`).
+- The native code is built for 64-bit ARM only (`abiFilters` in `app/build.gradle.kts`), as plain arm64-v8a baseline: no `-march`, nothing beyond what every 64-bit ARM phone has. The signal processing uses **NEON** (four floats per instruction, part of every arm64 phone): the FM demodulator through its own `vec4.hpp`, nrsc5 through its `HAVE_NEON` paths, and FFTW through its NEON codelets, which `CMakeLists.txt` adds by hand because FFTW's own CMake build doesn't know them. Everything also builds and runs without NEON (the PC harness) with the same arithmetic order, so results can be compared across machines.
 
 ## How it works
 
@@ -154,8 +154,8 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 ### Where things are
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the dongle, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
-- Next to it are seven self-contained C++17 headers with no Android code in them:
-  - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter).
+- Next to it are eight self-contained C++17 headers with no Android code in them:
+  - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter). `vec4.hpp` next to it is its four-floats-at-a-time layer: NEON on arm64, plain C++ anywhere else.
   - `rds.hpp`: the RDS / RBDS decoder. It needs nothing but the FM multiplex signal.
   - `drift.hpp`: the clock correction. A small resampler, and the tracker that works out the dongle's clock error.
   - `aligner.hpp`: measures the analog-vs-HD time offset and loudness difference.

@@ -1421,6 +1421,8 @@ static void benchMain() {
         }
     }
     out += "(10 ms per second of radio = 1 % of the core it ran on)\n";
+    // Build 14: say which engine this is, so a tester's figures can be read against the right build.
+    out += VEC4_NEON ? "NEON: on (arm64 - the FM demodulator, nrsc5 and FFTW use it)\n" : "NEON: off (not an arm64 build)\n";
     const int top = fastestCoreMhz();
     if (mhzCount > 0 && top > 0) {
         const int mhz = (int)(mhzSum / mhzCount + 0.5);

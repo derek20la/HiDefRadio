@@ -18,6 +18,29 @@ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O2")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O2")
 
 # ---------------------------------------------------------------------------
+# NEON (build 14, the optimisation step)
+# Every arm64 Android phone has NEON - 128-bit registers that do four float
+# operations (or eight 16-bit ones) in one instruction; the arm64 ABI requires
+# it, so no phone is left out. Three things use it when the build is arm64:
+#   - the app's own FM demodulator (fmdemod.hpp via vec4.hpp - switched by the
+#     compiler's own __ARM_NEON, no flag needed);
+#   - nrsc5's hand-written NEON paths (HAVE_NEON: the 32-tap search filter and
+#     the half-band decimators in firdecim_q15.c, the Viterbi decoder in
+#     conv_neon.h) - the same code Raspberry Pi builds of nrsc5 use;
+#   - FFTW's NEON codelets (the FFTs behind nrsc5), below.
+# The build stays plain arm64-v8a baseline: no -march, no -mcpu, nothing beyond
+# what every arm64 phone has (decision of 2026-10-07: never exclude an old phone
+# over one missing instruction). No -ffast-math anywhere - results must stay
+# reproducible against the survey recordings.
+# ---------------------------------------------------------------------------
+if (ANDROID_ABI STREQUAL "arm64-v8a" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(HIDEF_NEON ON)
+else ()
+    set(HIDEF_NEON OFF)
+endif ()
+message(STATUS "HiDef Radio: NEON ${HIDEF_NEON} (ABI ${ANDROID_ABI}, processor ${CMAKE_SYSTEM_PROCESSOR})")
+
+# ---------------------------------------------------------------------------
 # libusb (static library)
 # Talks to USB devices. We compile its C files ourselves instead of running
 # its Unix ./configure script; android/config.h replaces what configure makes.
@@ -101,6 +124,24 @@ add_subdirectory(external/fftw EXCLUDE_FROM_ALL)
 target_include_directories(fftw3f PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/api>)
 
+# FFTW's NEON codelets (build 14). FFTW's own CMakeLists knows SSE2 and AVX but
+# not NEON (its config.h.in leaves HAVE_NEON undefined, and the neon/ codelet
+# folders are not in its source lists) - the autotools build (./configure
+# --enable-neon) is what every Linux arm build uses. So the same two things are
+# done here by hand: the codelet files are added to the fftw3f target, and
+# HAVE_NEON=1 is defined for it (that also switches on simd-support/neon.c and
+# the NEON entries in dft/conf.c and rdft/conf.c). simd-support/simd-neon.h
+# needs the compiler's __ARM_NEON, which the arm64 target has by itself.
+# (One line in external/fftw/simd-support/neon.c was changed for arm64 - see
+# the note at the top of that file.)
+if (HIDEF_NEON)
+    file(GLOB fftw_neon_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/dft/simd/neon/*.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/rdft/simd/neon/*.c)
+    target_sources(fftw3f PRIVATE ${fftw_neon_SOURCES})
+    target_compile_definitions(fftw3f PRIVATE HAVE_NEON=1)
+endif ()
+
 # ---------------------------------------------------------------------------
 # FAAD2 2.11.2 + nrsc5's HDC patch (static library "faad_hdc")
 # AAC audio decoder. HD Radio uses a special AAC variant ("HDC"); the patch
@@ -143,6 +184,13 @@ add_library(nrsc5 STATIC
 # nrsc5 is written in C11 with GNU extensions (= -std=gnu11).
 set_target_properties(nrsc5 PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
 target_compile_definitions(nrsc5 PRIVATE _GNU_SOURCE HAVE_FAAD2)
+# nrsc5's NEON paths (build 14): HAVE_NEON is what nrsc5's own build defines with
+# its USE_NEON option (see the NEON note at the top). The flags nrsc5 adds with it
+# (-mcpu=cortex-a7 -mfpu=neon-vfpv4) are 32-bit ARM flags and are NOT used - on
+# arm64 NEON is always there.
+if (HIDEF_NEON)
+    target_compile_definitions(nrsc5 PRIVATE HAVE_NEON)
+endif ()
 
 target_include_directories(nrsc5
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/nrsc5-config   # our config.h

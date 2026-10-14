@@ -41,6 +41,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "vec4.hpp"                                // build 14: four floats at a time
 #include <algorithm>
 
 namespace rds {
@@ -208,13 +209,9 @@ public:
         pos = (pos + 1 == nLp) ? 0 : pos + 1;
         if (++decim < DECIM) return;
         decim = 0;
-        const float *pi_ = &hI[start], *pq = &hQ[start], *h = lp.data();
-        float a0 = 0, a1 = 0, a2 = 0, a3 = 0, b0 = 0, b1 = 0, b2 = 0, b3 = 0;
-        for (int k = 0; k < nLp; k += 4) {
-            a0 += h[k] * pi_[k]; a1 += h[k + 1] * pi_[k + 1]; a2 += h[k + 2] * pi_[k + 2]; a3 += h[k + 3] * pi_[k + 3];
-            b0 += h[k] * pq[k]; b1 += h[k + 1] * pq[k + 1]; b2 += h[k + 2] * pq[k + 2]; b3 += h[k + 3] * pq[k + 3];
-        }
-        baseband((a0 + a1) + (a2 + a3), (b0 + b1) + (b2 + b3));
+        float zi, zq;                                    // build 14: four taps per instruction (vec4.hpp)
+        vec::dot2(lp.data(), &hI[start], &hQ[start], nLp, zi, zq);
+        baseband(zi, zq);
     }
 
     // A counter that changes whenever something in status() changed (so the caller can skip the copy).

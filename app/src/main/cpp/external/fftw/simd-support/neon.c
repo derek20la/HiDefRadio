@@ -23,8 +23,13 @@
 
 #if HAVE_NEON
 
+/* HiDef Radio (build 14): on 64-bit ARM, NEON is part of the architecture (every
+   AArch64 processor has it), so no run-time probe is needed; and the probe below is
+   32-bit ARM code (the word 0xf2000150 is the 32-bit encoding of "vand q0, q0, q0";
+   executed as a 64-bit instruction it happens to be "ands x16, x10, #..." - harmless,
+   but not what it says). Skip it on AArch64 and take the "assume present" branch. */
 /* check for an environment where signals are known to work */
-#if defined(unix) || defined(linux)
+#if (defined(unix) || defined(linux)) && !defined(__aarch64__)
   # include <signal.h>
   # include <setjmp.h>
 

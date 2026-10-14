@@ -35,6 +35,8 @@ example of driving the engine outside Android.
   anyway. (Not set = stay on the analog, as every test before build 9 ran.)
 - `SPEEDTEST=5` presses the app's "Run speed test" button 5 s into the run and prints the
   result at the end (see "What does the radio cost" below).
+- `STEREO=mono` / `STEREO=stereo` the app's FM stereo setting (Always mono / Always stereo;
+  not set = Auto, as the app ships).
 - arguments: frequency in Hz, source (`0` Digital only, `1` Analog only, `2` Auto), seconds,
   then optional events `t:prog:N` (switch to program N at t seconds; 0 = HD1) and `t:src:N`.
 
@@ -74,6 +76,44 @@ stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI fun
 fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are downloaded into `build/`.
 
 `blendtest` (`build/blendtest`) tests `blend.hpp` alone with made-up audio.
+
+## The NEON step (build 14): what changed, what is still bit for bit, what is not
+
+Build 14 made the FM demodulator work a block at a time with four floats per instruction
+(`vec4.hpp`), switched on nrsc5's NEON paths and FFTW's NEON codelets on arm64. Three facts
+for anyone who compares recordings across builds:
+
+- **On a PC the harness still makes bit for bit the audio of build 13.** The filters sum
+  their taps in the same four-lane order as before, and the discriminator keeps the C
+  library's `atan2f` unless the engine is compiled with `-DFM_FAST_ATAN2=1`. Checked on five
+  runs (KRTH Auto / Analog only / Digital only, KKGO HD2 and back, KLLI): `cmp` says identical.
+- **On an arm64 phone the audio is not bit for bit the same, and cannot be:** NEON's
+  multiply-add rounds once instead of twice, and the discriminator uses a polynomial
+  arc tangent (vec4.hpp; 4.8e-7 rad worst case against the C library). What it comes to was
+  measured with the same engine built for arm64 and run in an emulator (zig cc + qemu-user):
+  in mono the audio differs from the PC's by 1 LSB (of 16 bits) on 0.03 % of samples; in
+  stereo by up to 4-5 LSB (-84 dB) on about 1 % of samples, because the pilot PLL's sine table
+  has 4,096 steps and a 1e-7 difference in the input flips a step now and then (rms of the
+  difference: 4e-6, -108 dB). The blend's decisions ("HD is good" at the same second, the
+  same fades) and the alignment figures were the same in every run. The HD audio itself
+  differs between a PC and an arm64 build by 1 LSB on 0.1 % of samples even with no NEON
+  anywhere - that is nrsc5's and FAAD2's own float arithmetic on two architectures.
+- **nrsc5's NEON paths and FFTW's NEON codelets change nothing in the HD audio:** bit for
+  bit the same on arm64 with and without them (four runs each), as expected for a decoder
+  whose output is bits.
+
+How the arm64 engine was run without a phone: `python3 -m pip install ziglang` gives a C/C++
+compiler that cross-compiles for `aarch64-linux-musl` (`python3 -m ziglang cc -target
+aarch64-linux-musl`), FAAD2 and FFTW build with CMake and a two-line toolchain file that names
+it, the rest of the harness builds like `build.sh` does with `gcc` / `clang++` replaced; the
+static `qemu-aarch64` from the multiarch/qemu-user-static releases runs the result on a PC
+at about real time. Not a speed measurement (an emulator), but every instruction the phone
+will execute runs there, and `WAVOUT` + the Python below compare the audio:
+
+    import numpy as np, wave
+    a, b = [np.frombuffer(wave.open(f).readframes(10**9), np.int16).astype(float) for f in ("ref.wav", "new.wav")]
+    n = min(len(a), len(b)); d = a[:n] - b[:n]
+    print("max |diff| %d LSB, rms %.2g, differing %.2f %%" % (abs(d).max(), np.sqrt((d*d).mean()), 100 * (d != 0).mean()))
 
 ## The rest of the HD search: searchtest and mkhdgap
 

@@ -20,24 +20,46 @@
 //
 // Everything is plain C++17 with no dependencies; filter coefficients are computed at start-up
 // (Kaiser-windowed sinc), so nothing has to be tuned by hand when a rate changes.
+//
+// Build 14 (the NEON step): the signal path is the same, but the work is done a block at a
+// time instead of a sample at a time, and the three filters, the byte-to-float conversion
+// and the discriminator's arc tangent run four values per instruction (vec4.hpp, NEON on
+// arm64, plain C++ elsewhere). Builds 1-13 pushed every one of the 1.5 million samples a
+// second through five function calls with a ring buffer each; now a block of ~130,000
+// samples goes through stage 1 in one loop, then stage 2 in one loop, and so on, and only
+// the parts that are a feedback loop by nature (DC blocker, offset tracker, pilot PLL, RDS,
+// the stereo blend) still go sample by sample. The arithmetic order inside each filter was
+// kept, so on a machine without NEON the audio is bit for bit what build 13 made; on NEON
+// the fused multiply-add and the polynomial atan2 (FM_FAST_ATAN2) change it at the 1e-7
+// level - see vec4.hpp and tools/harness/README.md, "The NEON step".
 #pragma once
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <vector>
 #include <algorithm>
 #include <complex>
+#include "vec4.hpp"                                // build 14: four floats at a time
 #include "rds.hpp"                                 // M12: the RDS / RBDS decoder
+
+// The discriminator's arc tangent: 1 = the polynomial in vec4.hpp (four at a time), 0 = the C
+// library's atan2f, one sample at a time. Default: the polynomial wherever NEON is, atan2f
+// elsewhere, so the desktop harness still reproduces builds 1-13 bit for bit unless told
+// otherwise (-DFM_FAST_ATAN2=1). The difference is below 1.5e-7 of full scale (vec4.hpp).
+#ifndef FM_FAST_ATAN2
+#define FM_FAST_ATAN2 VEC4_NEON
+#endif
 
 namespace fm {
 
-static const double IQ_RATE = 1488375.0;        // NRSC5_SAMPLE_RATE_CU8
-static const int    DECIM1 = 5;
-static const double MPX_RATE = IQ_RATE / DECIM1; // 297,675
-static const double AUDIO_RATE = 44100.0;
-static const int    RESAMPLE_L = 4, RESAMPLE_M = 27; // 297,675 * 4 / 27 = 44,100 exactly
-static const double MAX_DEVIATION_HZ = 75000.0;
-static const double PILOT_HZ = 19000.0;          // 11b: the stereo pilot; the L-R subcarrier is at 2 x 19 kHz
+static constexpr double IQ_RATE = 1488375.0;        // NRSC5_SAMPLE_RATE_CU8
+static constexpr int    DECIM1 = 5;
+static constexpr double MPX_RATE = IQ_RATE / DECIM1; // 297,675
+static constexpr double AUDIO_RATE = 44100.0;
+static constexpr int    RESAMPLE_L = 4, RESAMPLE_M = 27; // 297,675 * 4 / 27 = 44,100 exactly
+static constexpr double MAX_DEVIATION_HZ = 75000.0;
+static constexpr double PILOT_HZ = 19000.0;          // 11b: the stereo pilot; the L-R subcarrier is at 2 x 19 kHz
 
 // ---- 11b: the stereo setting (setStereoMode) ----
 static const int STEREO_AUTO = 0;                // stereo when the station sends it, blended to mono when noisy
@@ -89,37 +111,53 @@ inline std::vector<float> designLowpass(double fs, double fPass, double fStop, d
 }
 
 // ---- Real-coefficient FIR on a complex (I/Q) stream with integer decimation ----------------
-// Keeps its own history so blocks of any size can be pushed.
+// Works a block at a time (build 14). The caller writes the block's I and Q samples straight
+// into this filter's input area (inI() / inQ(), right behind the taps-1 samples of history it
+// keeps), calls process(), and reads the outputs. Each output is a dot product of the padded,
+// reversed taps with a window of the input - four taps per instruction (vec4.hpp) in the same
+// four-lane order the one-sample-at-a-time code of builds 1-13 used, so the sums come out
+// the same (bit for bit without a fused multiply-add). With decimation only every m-th
+// window is computed - the inputs in between are never multiplied at all.
 class ComplexFirDecimator {
 public:
     void init(const std::vector<float> &taps, int decim) {
         h = taps; m = decim; taps_ = (int)h.size();
         n = (taps_ + 3) / 4 * 4;                                  // padded length (multiple of 4)
-        hrev.assign(n, 0.f);                                      // reversed taps, zero padded at the END
+        hrev.assign(n, 0.f);                                      // reversed taps, zero padded at the START
         for (int k = 0; k < taps_; k++) hrev[k + (n - taps_)] = h[taps_ - 1 - k];
-        histI.assign(2 * n, 0.f); histQ.assign(2 * n, 0.f); pos = 0; phase = 0;
+        H = n - 1;                                                // samples of history in front of each block
+        bufI.assign(H, 0.f); bufQ.assign(H, 0.f); phase = 0;      // starts from silence
     }
-    // Pushes one sample; returns true and fills (oi, oq) when an output sample is due.
-    inline bool push(float i, float q, float &oi, float &oq) {
-        histI[pos] = histI[pos + n] = i;                          // double buffer -> contiguous window
-        histQ[pos] = histQ[pos + n] = q;
-        int start = pos + 1;                                      // oldest sample of the window
-        pos = (pos + 1 == n) ? 0 : pos + 1;
-        if (++phase < m) return false;
-        phase = 0;
-        const float *pi = &histI[start], *pq = &histQ[start], *hr = hrev.data();
-        // 4 independent accumulators so the compiler can pipeline/vectorise (floats
-        // can't be re-ordered otherwise); n is padded to a multiple of 4 with zeros.
-        float a0 = 0, a1 = 0, a2 = 0, a3 = 0, b0 = 0, b1 = 0, b2 = 0, b3 = 0;
-        for (int k = 0; k < n; k += 4) {
-            a0 += hr[k] * pi[k]; a1 += hr[k + 1] * pi[k + 1]; a2 += hr[k + 2] * pi[k + 2]; a3 += hr[k + 3] * pi[k + 3];
-            b0 += hr[k] * pq[k]; b1 += hr[k + 1] * pq[k + 1]; b2 += hr[k + 2] * pq[k + 2]; b3 += hr[k + 3] * pq[k + 3];
-        }
-        oi = (a0 + a1) + (a2 + a3); oq = (b0 + b1) + (b2 + b3); return true;
+    // Room for a block of cnt samples; returns where the caller writes them.
+    float *inI(size_t cnt) { reserve(cnt); return bufI.data() + H; }
+    float *inQ(size_t cnt) { reserve(cnt); return bufQ.data() + H; }
+    // How many outputs a block of cnt inputs will give (so the caller can size its buffers).
+    size_t outputs(size_t cnt) const {
+        size_t first = (size_t)(m - 1 - phase);                   // index of the first output's input sample
+        return cnt <= first ? 0 : (cnt - first + (size_t)m - 1) / (size_t)m;
+    }
+    // Filters the cnt samples written at inI()/inQ(); writes the outputs; keeps the history.
+    size_t process(size_t cnt, float *oi, float *oq) {
+        const float *hr = hrev.data(), *bi = bufI.data(), *bq = bufQ.data();
+        size_t out = 0;
+        // The one-sample code gave an output on the m-th sample pushed (phase counted the
+        // samples since the last output); the window ends on that sample, hr[0] multiplies
+        // the oldest of the n. In the buffer the block's sample k sits at index H + k, so
+        // its window is [k, k + n).
+        for (size_t k = (size_t)(m - 1 - phase); k < cnt; k += (size_t)m, out++)
+            vec::dot2(hr, bi + k, bq + k, n, oi[out], oq[out]);
+        phase = (int)((cnt + (size_t)phase) % (size_t)m);
+        // keep the last H samples as the history for the next block
+        std::memmove(bufI.data(), bufI.data() + cnt, H * sizeof(float));
+        std::memmove(bufQ.data(), bufQ.data() + cnt, H * sizeof(float));
+        return out;
     }
     int groupDelay() const { return (taps_ - 1) / 2; }            // in input samples
 private:
-    std::vector<float> h, hrev, histI, histQ; int n = 0, taps_ = 0, m = 1, pos = 0, phase = 0;
+    void reserve(size_t cnt) {
+        if (bufI.size() < H + cnt + 4) { bufI.resize(H + cnt + 4, 0.f); bufQ.resize(H + cnt + 4, 0.f); }
+    }
+    std::vector<float> h, hrev, bufI, bufQ; int n = 0, taps_ = 0, m = 1, phase = 0; size_t H = 0;
 };
 
 // ---- Rational resampler (L up, M down) with a built-in low-pass, real signal ----------------
@@ -141,6 +179,7 @@ public:
         // Start on the filter's centre so output sample m sits at input time m*M/L exactly
         // (the filter's group delay is absorbed; the first outputs see zeros = silence).
         nextT = ((long long)proto.size() - 1) / 2;
+        phase = (int)(nextT % L); countL = 0;
         delaySamplesIn = 0;
     }
     // 11b: switch the second channel on (its history starts from silence) or off.
@@ -154,26 +193,23 @@ public:
     template <class Out> inline void push(float x, float y, Out &&emit) {
         hist[pos] = hist[pos + K] = x;
         if (second) hist2[pos] = hist2[pos + K] = y;
-        int start = pos + 1; pos = (pos + 1 == K) ? 0 : pos + 1; count++;
-        // newest sample has index count-1; window = samples count-K .. count-1 (oldest first) = hist[start..start+K)
-        while (nextT / L <= count - 1) {
-            int p = (int)(nextT % L);
-            const float *hp = &poly[(size_t)p * K], *xw = &hist[start];
-            float a0 = 0, a1 = 0, a2 = 0, a3 = 0;                   // hp is stored reversed: hp[j] multiplies x[n-(K-1-j)]
-            for (int j = 0; j < K; j += 4) { a0 += hp[j] * xw[j]; a1 += hp[j + 1] * xw[j + 1]; a2 += hp[j + 2] * xw[j + 2]; a3 += hp[j + 3] * xw[j + 3]; }
-            float b = 0;
-            if (second) {
-                const float *yw = &hist2[start];
-                float b0 = 0, b1 = 0, b2 = 0, b3 = 0;
-                for (int j = 0; j < K; j += 4) { b0 += hp[j] * yw[j]; b1 += hp[j + 1] * yw[j + 1]; b2 += hp[j + 2] * yw[j + 2]; b3 += hp[j + 3] * yw[j + 3]; }
-                b = (b0 + b1) + (b2 + b3);
-            }
-            emit((a0 + a1) + (a2 + a3), b); nextT += M;
+        int start = pos + 1; pos = (pos + 1 == K) ? 0 : pos + 1; count++; countL += L;
+        // newest sample has index count-1; window = samples count-K .. count-1 (oldest first) = hist[start..start+K).
+        // An output is due while nextT / L <= count - 1, i.e. nextT < L * count (countL). The phase
+        // p = nextT % L is carried along instead of divided out (build 14: the two 64-bit
+        // divisions here were a measurable part of the demodulator's cost, 300,000 times a second).
+        while (nextT < countL) {
+            const float *hp = &poly[(size_t)phase * K];             // hp is stored reversed: hp[j] multiplies x[n-(K-1-j)]
+            float a, b = 0;
+            if (second) vec::dot2(hp, &hist[start], &hist2[start], K, a, b);   // build 14: four taps per instruction
+            else a = vec::dot(hp, &hist[start], K);
+            emit(a, b); nextT += M;
+            phase += M % L; if (phase >= L) phase -= L;            // = nextT % L
         }
     }
     double delaySamplesIn = 0;
 private:
-    std::vector<float> poly, hist, hist2; int L = 1, M = 1, K = 0, pos = 0; long long count = 0, nextT = 0;
+    std::vector<float> poly, hist, hist2; int L = 1, M = 1, K = 0, pos = 0, phase = 0; long long count = 0, countL = 0, nextT = 0;
     bool second = false;
 };
 
@@ -386,21 +422,53 @@ public:
     }
 
     // Feed cu8 bytes (I,Q,I,Q,...). Audio appears in audioOut (append-only; caller clears).
+    // Build 14: a block at a time - each stage runs over the whole block before the next one
+    // starts (the stages that are feedback loops still go sample by sample, inside their loop).
     void processCu8(const uint8_t *buf, size_t len) {
-        for (size_t k = 0; k + 1 < len; k += 2) {
-            float i = (buf[k] - 127.5f) * (1.f / 127.5f), q = (buf[k + 1] - 127.5f) * (1.f / 127.5f);
-            float oi, oq;
-            if (!stage1.push(i, q, oi, oq)) continue;
-            // DC blocker
-            dcI += dcAlpha * (oi - dcI); dcQ += dcAlpha * (oq - dcQ);
+        const size_t n = len / 2;                                   // IQ samples in this block
+        if (n == 0) return;
+        // 1. bytes -> floats, straight into stage 1's input area (behind its history)
+        vec::cu8ToFloat(buf, stage1.inI(n), stage1.inQ(n), n);
+        // 2. stage 1: low-pass + decimate by 5, into stage 2's input area
+        const size_t m1 = stage1.outputs(n);
+        float *s2i = stage2.inI(m1), *s2q = stage2.inQ(m1);
+        const size_t m = stage1.process(n, s2i, s2q);
+        // 3. DC blocker on the decimated signal (a feedback loop: sample by sample)
+        for (size_t j = 0; j < m; j++) {
+            dcI += dcAlpha * (s2i[j] - dcI); dcQ += dcAlpha * (s2q[j] - dcQ);
             if (dcAlpha > dcAlphaSlow) dcAlpha *= dcDecay;              // fast start, slow tracking
-            oi -= dcI; oq -= dcQ;
-            float ci = 0, cq = 0; stage2.push(oi, oq, ci, cq);
-            // discriminator: angle of x[n] * conj(x[n-1])
-            float re = ci * prevI + cq * prevQ, im = cq * prevI - ci * prevQ;
-            prevI = ci; prevQ = cq;
-            float mpx = std::atan2(im, re) * discScale;             // 1.0 = 75 kHz
-            level += levAlpha * (std::sqrt(re * re + im * im) - level); // |x|^2 smoothed -> carrier level
+            s2i[j] -= dcI; s2q[j] -= dcQ;
+        }
+        // 4. stage 2: the channel filter (rejects the HD sidebands). Its outputs go behind one
+        //    slot of history (the last sample of the previous block), and the arrays have a few
+        //    spare slots at the end, so the discriminator can run over whole groups of four.
+        if (chI.size() < m + 1 + 8) { chI.resize(m + 1 + 8, 0.f); chQ.resize(m + 1 + 8, 0.f); mag.resize(m + 8); mpxBuf.resize(m + 8); }
+        chI[0] = prevI; chQ[0] = prevQ;
+        stage2.process(m, chI.data() + 1, chQ.data() + 1);
+        prevI = chI[m]; prevQ = chQ[m];
+        // 5. discriminator: angle of x[n] * conj(x[n-1]), four samples at a time
+        //    (the spare slots beyond m hold whatever they hold - those results are not used)
+        {
+#if FM_FAST_ATAN2
+            const vec::f4 scale = vec::set1(discScale);
+#endif
+            for (size_t j = 0; j < m; j += 4) {
+                vec::f4 ci = vec::load(&chI[j + 1]), cq = vec::load(&chQ[j + 1]);
+                vec::f4 pI = vec::load(&chI[j]),     pQ = vec::load(&chQ[j]);
+                vec::f4 re = vec::fma(vec::mul(ci, pI), cq, pQ);              // ci*pI + cq*pQ
+                vec::f4 im = vec::fms(vec::mul(cq, pI), ci, pQ);              // cq*pI - ci*pQ
+                vec::store(&mag[j], vec::sqrt(vec::fma(vec::mul(re, re), im, im)));
+#if FM_FAST_ATAN2
+                vec::store(&mpxBuf[j], vec::mul(vec::atan2(im, re), scale)); // 1.0 = 75 kHz
+#else
+                for (int i = 0; i < 4; i++) mpxBuf[j + i] = std::atan2(vec::lane(im, i), vec::lane(re, i)) * discScale;
+#endif
+            }
+        }
+        // 6. the rest, sample by sample (feedback loops and the audio path)
+        for (size_t j = 0; j < m; j++) {
+            float mpx = mpxBuf[j];
+            level += levAlpha * (mag[j] - level);                    // |x| smoothed -> carrier level
             offset += offAlpha * (mpx - offset);                     // carrier offset (fraction of 75 kHz)
             mpx -= offset;
             quiet.push(mpx);                                         // 9k: noise in 60-100 kHz
@@ -477,6 +545,7 @@ private:
         stereoTarget = std::max(0.f, std::min(1.f, (q - QUIET_MONO_DB) / (QUIET_STEREO_DB - QUIET_MONO_DB)));
     }
     ComplexFirDecimator stage1, stage2; Resampler audio;
+    std::vector<float> chI, chQ, mag, mpxBuf;                             // build 14: one block's channel output, |x|, MPX
     QuietMeter quiet;                                                     // 9k
     PilotPll pll;                                                         // 11b
     rds::Decoder rdsDec{MPX_RATE};                                        // M12

@@ -58,7 +58,8 @@ int main(int argc, char **argv) {
     J(setBlendUnmatchedNative)(&env, nullptr, getenv("UNMATCHED") && strcmp(getenv("UNMATCHED"), "hd") == 0 ? JNI_TRUE : JNI_FALSE);
     // HDREST=off: the HD search never rests (hdsearch.hpp) - the engine as it was before build 9.
     if (getenv("HDREST") && strcmp(getenv("HDREST"), "off") == 0) J(setHdRestNative)(&env, nullptr, JNI_FALSE);
-    J(setStereoModeNative)(&env, nullptr, 0);
+    // STEREO=mono / STEREO=stereo: the FM stereo setting (default Auto, as the app ships)
+    J(setStereoModeNative)(&env, nullptr, getenv("STEREO") && strcmp(getenv("STEREO"), "mono") == 0 ? 1 : getenv("STEREO") && strcmp(getenv("STEREO"), "stereo") == 0 ? 2 : 0);
     // DRIFT=off: no clock correction (drift.hpp) - the engine as it was before build 6.
     if (getenv("DRIFT") && strcmp(getenv("DRIFT"), "off") == 0) J(setClockCorrectionNative)(&env, nullptr, JNI_FALSE);
     // CALLS="KGGI KJNY ...": the call letters licensed on this frequency, as the app's FCC list
