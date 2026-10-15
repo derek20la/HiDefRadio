@@ -141,6 +141,8 @@ One stream of samples from the dongle feeds both decoders. That does not put the
 
 ### How the blend works
 
+The short version is below. [docs/how-the-blend-works.md](docs/how-the-blend-works.md) walks through it step by step for radio hobbyists, with pictures of the time line and pointers into the code.
+
 1. **Analog first.** The FM demodulator has sound within a second of tuning. The HD decoder needs a few seconds to sync and to produce its first audio.
 2. **Measure the delay.** A station delays its analog audio so that a receiver's HD decoder has time to catch up (the "diversity delay"). nrsc5 decodes faster than that, so in this app the HD audio comes out about 2.5 seconds before the same sound arrives on the analog side. The figure is close to 2.485 s on most Los Angeles stations, but a few are tens of milliseconds off and one wanders from day to day, so `aligner.hpp` measures it on every tune by cross-correlating the two audio streams. A match is accepted only when the correlation is at least 0.5.
 3. **Keep the two clocks together.** The HD audio comes at exactly 44,100 frames per second of the station's time. The analog audio comes at 44,100 frames per second of the dongle's time, and a dongle's crystal can be far off: 1 part per million with a TCXO (RTL-SDR Blog V3 and V4), 30 to 100 ppm without one. At 57 ppm the analog gains 2.5 frames on the HD every second, so two measurements five seconds apart never agree and the blend would never start. `drift.hpp` resamples the analog audio by the missing few millionths. It gets a first figure from the tuning error (one crystal sets both the tuner frequency and the sample clock, so a station that shows up 5.4 kHz low at 94.5 MHz means a clock 57 ppm fast) and then the exact one from a straight-line fit through the aligner's own measurements. The tuning error stays the referee: the fit counts only once at least four measurements lie on a tight line, and it may not move the figure more than 8 ppm away from the tuning error unless half a minute of measurements prove the tuning error wrong. (On a station whose analog and HD audio are processed differently, single measurements land 10 to 20 frames off. Without this rule one of them can send the correction 40 ppm astray, which is what a tester's video showed.) The HD audio is never touched.
@@ -174,6 +176,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 - `app/src/main/cpp/CMakeLists.txt` builds libusb, librtlsdr, FFTW, FAAD2 and nrsc5 as static libraries.
 - `tools/harness` runs the whole native engine on a PC against an IQ recording (`.cu8`), with no phone and no dongle. Every DSP step was tested that way. It also has `mkdrift`, which turns a recording into what a dongle with a cheap crystal would have recorded, and `drifttest`, which runs the clock correction through hours of made-up radio in seconds.
 - `tools/lrcheck` is the test that proves the FM stereo decoder has left and right the right way round.
+- `docs/` has longer explanations: [How the blend works](docs/how-the-blend-works.md).
 - `store/` holds the pictures for the Google Play listing.
 
 ## Known limits

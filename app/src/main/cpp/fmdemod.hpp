@@ -1,37 +1,74 @@
-// fmdemod.hpp - analog FM demodulator for HiDef Radio (M11).
+// fmdemod.hpp - the analog FM receiver of HiDef Radio: IQ samples in, stereo audio out.
 //
-// Input:  the same cu8 IQ stream that libnrsc5 gets (1,488,375 samples/s, station at 0 Hz).
-// Output: analog audio at 44,100 Hz, float, where 1.0 = 75 kHz deviation (100 % modulation).
-//         11b: STEREO, interleaved L R L R ... (left = right while the station or the setting is mono).
+// WHAT IT DOES
+// The RTL-SDR dongle hands us raw radio: 1,488,375 complex samples a second ("IQ"), 8 bits each,
+// centred on the station we are tuned to (the station's carrier sits at 0 Hz). The very same
+// stream goes to libnrsc5, which decodes the HD Radio (digital) part of the signal. This file
+// decodes the OLD part - the analog FM that every radio since the 1940s can hear - so the app
+// can play it while the HD is not there yet, blend between the two like a car radio does
+// (blend.hpp), and show how good the signal is.
 //
-// Signal path (all rates exact, no drift against the HD audio):
-//   cu8 -> float I/Q
-//   stage 1: low-pass (pass 100 kHz, stop 197.7 kHz) + decimate by 5   -> 297,675 S/s
-//   DC blocker (removes the dongle's DC spike, ~10 Hz corner)
-//   stage 2: low-pass (pass 100 kHz, stop 125 kHz, 70 dB)               <- rejects the HD sidebands (start at 129.4 kHz for MP1)
-//   discriminator: angle(x[n] * conj(x[n-1])) -> instantaneous frequency -> MPX (composite) signal
-//   carrier-offset tracker (running mean of the MPX, ~0.5 s) subtracted -> also reported as freqOffsetHz()
-//   9k: quieting meter on the MPX (noise in 60-100 kHz, where a station sends nothing) -> quietingDb()
-//   11b: pilot PLL (19 kHz) -> is there a pilot (stereo station)? -> 38 kHz from the PLL's phase
-//   M = L+R: MPX          low-pass 15 kHz (pilot at 19 kHz rejected 60 dB) + resample 297,675 -> 44,100 (x4/27)
-//   D = L-R: MPX x 38 kHz low-pass 15 kHz + the same resampler (only while a pilot is there and stereo is wanted)
-//   L = M + s*D, R = M - s*D, where s = the stereo amount (0 = mono ... 1 = full stereo) - the
-//   stereo -> mono blend on noisy signals (see StereoBlend below), then de-emphasis 75 us on each channel.
+//   Input:  cu8 IQ (bytes I, Q, I, Q ... - 128 = zero), 1,488,375 samples/s, station at 0 Hz.
+//   Output: audio at 44,100 Hz, float, STEREO interleaved L R L R ...; 1.0 = 75 kHz deviation
+//           (= 100 % modulation, the loudest an FM station may legally be). Left = right while
+//           the station, the signal or the user's setting is mono.
 //
-// Everything is plain C++17 with no dependencies; filter coefficients are computed at start-up
+// THE SIGNAL PATH (every rate is an exact ratio of the input rate, so the analog audio never
+// drifts against the dongle's clock - see drift.hpp for the station's clock)
+//
+//   bytes -> floats (I, Q)
+//   stage 1: low-pass (pass 100 kHz, stop 197.7 kHz) + keep every 5th sample   -> 297,675 S/s
+//       An FM station is ~200 kHz wide; nothing outside +-100 kHz is wanted, so we may throw
+//       away 4 samples in 5 - but only after filtering, or the stations further out would
+//       fold back on top of ours ("aliasing"). At the new rate a signal at f comes back at
+//       297,675 - f, so everything above 297,675 - 100,000 = 197.7 kHz would land INSIDE our
+//       +-100 kHz: that is the stop band (60 dB down). What slips through between 100 and
+//       197.7 kHz lands above 100 kHz, where stage 2 removes it.
+//   DC blocker: the dongle adds a small spike at exactly 0 Hz (its own leakage); a slow
+//       running average of I and Q is subtracted.
+//   stage 2: low-pass (pass 100 kHz, stop 125 kHz, 70 dB) - the CHANNEL filter. A hybrid HD
+//       station puts its digital carriers just outside the analog, from 129.4 kHz out (MP1
+//       mode; the "extended" modes start at ~101-115 kHz and are partly let through - harmless,
+//       they sound like a little more hiss). Without this filter the digital carriers would
+//       be heard as a loud hiss in the analog.
+//   discriminator: the angle between each sample and the one before it = how fast the phase
+//       turns = the instantaneous frequency = what the station's transmitter was modulated
+//       with. That signal is called the MPX (multiplex) or "composite": mono audio 0-15 kHz,
+//       the 19 kHz stereo pilot, the stereo difference signal around 38 kHz, RDS at 57 kHz,
+//       and sometimes other subcarriers (SCA) at 67 / 92 kHz.
+//   offset tracker: a 0.5 s average of the MPX = how far the station is from where we tuned
+//       (the dongle's crystal is never exact); subtracted, and reported as freqOffsetHz().
+//   quieting meter (QuietMeter): the noise in 60-100 kHz of the MPX, where a station sends
+//       nothing -> the S-meter on the screen (quietingDb()).
+//   pilot PLL (PilotPll): locks to the 19 kHz pilot -> "is this a stereo station?" and the
+//       exact phase of the 38 kHz subcarrier.
+//   RDS decoder (rds.hpp): reads the 57 kHz data subcarrier (station name, call letters, text).
+//   M = L+R: the MPX itself, low-passed at 15 kHz (the 19 kHz pilot rejected by 60 dB) and
+//       resampled 297,675 -> 44,100 S/s (x4 / 27, exactly).
+//   D = L-R: the MPX multiplied by the 38 kHz subcarrier, which moves the difference signal
+//       down to 0-15 kHz; then the same filter and resampler. Only computed while a pilot is
+//       there and stereo is wanted.
+//   L = M + s*D, R = M - s*D, where s = the stereo amount (0 = mono ... 1 = full stereo): the
+//       stereo -> mono blend on noisy signals (see "stereo -> mono blend" below).
+//   de-emphasis on each channel (75 us in the Americas, 50 us elsewhere): the station boosts
+//       the treble before sending (pre-emphasis) to rise above the noise; this is the
+//       matching treble cut.
+//
+// Everything is plain C++17 with no dependencies (no Android): it can be lifted into any
+// program that has RTL-SDR samples. Filter coefficients are computed at start-up
 // (Kaiser-windowed sinc), so nothing has to be tuned by hand when a rate changes.
 //
-// Build 14 (the NEON step): the signal path is the same, but the work is done a block at a
-// time instead of a sample at a time, and the three filters, the byte-to-float conversion
-// and the discriminator's arc tangent run four values per instruction (vec4.hpp, NEON on
-// arm64, plain C++ elsewhere). Builds 1-13 pushed every one of the 1.5 million samples a
-// second through five function calls with a ring buffer each; now a block of ~130,000
-// samples goes through stage 1 in one loop, then stage 2 in one loop, and so on, and only
-// the parts that are a feedback loop by nature (DC blocker, offset tracker, pilot PLL, RDS,
-// the stereo blend) still go sample by sample. The arithmetic order inside each filter was
-// kept, so on a machine without NEON the audio is bit for bit what build 13 made; on NEON
-// the fused multiply-add and the polynomial atan2 (FM_FAST_ATAN2) change it at the 1e-7
-// level - see vec4.hpp and tools/harness/README.md, "The NEON step".
+// SPEED (app build 14, "the NEON step"): the work is done a block at a time (~130,000 samples)
+// instead of a sample at a time: stage 1 runs over the whole block in one loop, then stage 2,
+// and so on. The three filters, the byte-to-float conversion and the discriminator's arc
+// tangent work on four values per instruction (vec4.hpp: NEON on a phone's arm64 processor,
+// plain C++ elsewhere). Only the parts that are feedback loops by nature (DC blocker, offset
+// tracker, pilot PLL, RDS, the stereo blend) still go sample by sample. The arithmetic order
+// inside each filter was kept, so on a machine without NEON the audio is bit for bit what the
+// older one-sample-at-a-time code made; on NEON the fused multiply-add and the polynomial
+// atan2 (FM_FAST_ATAN2) change it at the 1e-7 level - see vec4.hpp and
+// tools/harness/README.md, "The NEON step". Measured on a phone: 87 -> 25 ms of processor
+// time per second of radio.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -40,12 +77,12 @@
 #include <vector>
 #include <algorithm>
 #include <complex>
-#include "vec4.hpp"                                // build 14: four floats at a time
-#include "rds.hpp"                                 // M12: the RDS / RBDS decoder
+#include "vec4.hpp"                                // four floats per instruction (NEON on arm64)
+#include "rds.hpp"                                 // the RDS / RBDS decoder (57 kHz data subcarrier)
 
 // The discriminator's arc tangent: 1 = the polynomial in vec4.hpp (four at a time), 0 = the C
 // library's atan2f, one sample at a time. Default: the polynomial wherever NEON is, atan2f
-// elsewhere, so the desktop harness still reproduces builds 1-13 bit for bit unless told
+// elsewhere, so the desktop harness still reproduces the older code bit for bit unless told
 // otherwise (-DFM_FAST_ATAN2=1). The difference is below 1.5e-7 of full scale (vec4.hpp).
 #ifndef FM_FAST_ATAN2
 #define FM_FAST_ATAN2 VEC4_NEON
@@ -53,28 +90,34 @@
 
 namespace fm {
 
-static constexpr double IQ_RATE = 1488375.0;        // NRSC5_SAMPLE_RATE_CU8
+static constexpr double IQ_RATE = 1488375.0;        // NRSC5_SAMPLE_RATE_CU8: the rate nrsc5 wants, so one stream feeds both
 static constexpr int    DECIM1 = 5;
 static constexpr double MPX_RATE = IQ_RATE / DECIM1; // 297,675
 static constexpr double AUDIO_RATE = 44100.0;
 static constexpr int    RESAMPLE_L = 4, RESAMPLE_M = 27; // 297,675 * 4 / 27 = 44,100 exactly
-static constexpr double MAX_DEVIATION_HZ = 75000.0;
-static constexpr double PILOT_HZ = 19000.0;          // 11b: the stereo pilot; the L-R subcarrier is at 2 x 19 kHz
+static constexpr double MAX_DEVIATION_HZ = 75000.0; // FM broadcasting's 100 % modulation (the carrier swings +-75 kHz)
+static constexpr double PILOT_HZ = 19000.0;          // the stereo pilot; the L-R subcarrier is at 2 x 19 = 38 kHz
 
-// ---- 11b: the stereo setting (setStereoMode) ----
+// ---- the "FM stereo" setting (setStereoMode) ----
 static const int STEREO_AUTO = 0;                // stereo when the station sends it, blended to mono when noisy
-static const int STEREO_MONO = 1;                // always mono ("with DX, cut out the noisy stereo") - skips the L-R work
+static const int STEREO_MONO = 1;                // always mono (for DX listening: weak distant stations hiss less) - skips the L-R work
 static const int STEREO_FULL = 2;                // stereo whenever there is a pilot, never blended (hiss and all)
 
-// ---- 11b: stereo -> mono blend, the way a car radio's chip does it ----
-// The Si4684/Si4689 (the FM/HD chip in most car radios) reduces the stereo
-// separation gradually between two signal-quality limits (its defaults: SNR
-// 24 dB = full stereo ... 15 dB = full mono), quickly toward mono (16 ms) and
-// slowly back to stereo (4 s), so a fade never clicks. Here the "signal
-// quality" is the 9k quieting meter: full stereo from QUIET_STEREO_DB up, full
-// mono from QUIET_MONO_DB down, a straight line in between (in the stereo
-// amount s: L = M + s*D). No pilot = mono, whatever the quieting. Calibrated on
-// the 2026-09-28 recordings (see the plan, 11b).
+// ---- stereo -> mono blend, the way a car radio's chip does it ----
+// Why: FM stereo is noisier than mono. The L-R signal rides on a 38 kHz subcarrier, up where
+// the discriminator's noise is strongest, so a weak station that sounds fine in mono hisses in
+// stereo. Every car radio therefore narrows the stereo as the signal gets worse.
+// The Si4684/Si4689 (the FM/HD chip in most car radios) reduces the stereo separation
+// gradually between two signal-quality limits (its defaults: SNR 24 dB = full stereo ...
+// 15 dB = full mono), quickly toward mono (16 ms) and slowly back to stereo (4 s), so a fade
+// never clicks or "pumps". Here the "signal quality" is the quieting meter (QuietMeter below):
+// full stereo from QUIET_STEREO_DB up, full mono from QUIET_MONO_DB down, a straight line in
+// between (in the stereo amount s: L = M + s*D). No pilot = mono, whatever the quieting.
+// The two limits were chosen on recordings of Los Angeles stations (2026-09-28) and confirmed
+// by a listening test on a weak station (KGGI 99.1): the blend sounded better without the hiss.
+// Measured on the RTL-SDR: stereo costs only ~5 dB of extra hiss here, not the textbook
+// ~20 dB, because this dongle's noise floor is flat across the MPX (8-bit quantisation sets
+// it, not thermal noise) - so the blend matters less than in a car, but still helps.
 static const float QUIET_STEREO_DB = 36.0f;      // quieting >= this: full stereo (4 bars on the S-meter)
 static const float QUIET_MONO_DB   = 24.0f;      // quieting <= this: mono ("weak" on the S-meter starts at 25)
 static const float BLEND_ATTACK_S  = 0.05f;      // full stereo -> mono in this long (the meter itself adds ~0.1 s)
@@ -84,6 +127,11 @@ static const float PILOT_ON  = 0.025f;           // pilot amplitude (1.0 = 75 kH
 static const float PILOT_OFF = 0.012f;           // ... and to drop it again (hysteresis)
 
 // ---- Kaiser-window low-pass design -------------------------------------------------------
+// A "windowed sinc" FIR: the ideal low-pass (a sinc) cut to a finite length and tapered by a
+// Kaiser window. The two formulas for beta and the length n are Kaiser's own (as in
+// Oppenheim & Schafer, "Discrete-Time Signal Processing"): give them the transition width and
+// the attenuation you want, and they say how long the filter has to be.
+// besselI0 = the modified Bessel function of order 0 (the Kaiser window's shape), by its series.
 inline double besselI0(double x) {
     double sum = 1, term = 1, k = 1;
     while (term > 1e-12 * sum) { double h = x / (2 * k); term *= h * h; sum += term; k += 1; }
@@ -111,11 +159,11 @@ inline std::vector<float> designLowpass(double fs, double fPass, double fStop, d
 }
 
 // ---- Real-coefficient FIR on a complex (I/Q) stream with integer decimation ----------------
-// Works a block at a time (build 14). The caller writes the block's I and Q samples straight
+// "Decimation by m" = keep one output in m. Works a block at a time. The caller writes the block's I and Q samples straight
 // into this filter's input area (inI() / inQ(), right behind the taps-1 samples of history it
 // keeps), calls process(), and reads the outputs. Each output is a dot product of the padded,
 // reversed taps with a window of the input - four taps per instruction (vec4.hpp) in the same
-// four-lane order the one-sample-at-a-time code of builds 1-13 used, so the sums come out
+// four-lane order the older one-sample-at-a-time code used, so the sums come out
 // the same (bit for bit without a fused multiply-add). With decimation only every m-th
 // window is computed - the inputs in between are never multiplied at all.
 class ComplexFirDecimator {
@@ -161,9 +209,14 @@ private:
 };
 
 // ---- Rational resampler (L up, M down) with a built-in low-pass, real signal ----------------
-// 11b: TWO channels through the same filter, in lock-step (M = L+R and D = L-R),
-// so both audio channels come out of the same output sample times. The second
-// channel can be switched off (mono: its FIR isn't computed at all).
+// Changes the rate by L / M (here 4 / 27: 297,675 -> 44,100 S/s). In principle: put L-1 zeros
+// between the input samples, low-pass, keep one sample in M. In practice the zeros are never
+// multiplied: the filter is split into L "phases" (polyphase), and each output uses the one
+// phase whose taps line up with real samples. The low-pass also does the audio's job: it cuts
+// at 15 kHz (FM audio stops there) and removes the 19 kHz pilot.
+// TWO channels go through the same filter in lock-step (M = L+R and D = L-R), so both come
+// out at exactly the same output sample times - they could never drift apart. The second
+// channel can be switched off (mono: its filter isn't computed at all).
 class Resampler {
 public:
     // Filter designed at the virtual rate fs*L; cutoff/stop are in Hz of the real signal.
@@ -182,7 +235,7 @@ public:
         phase = (int)(nextT % L); countL = 0;
         delaySamplesIn = 0;
     }
-    // 11b: switch the second channel on (its history starts from silence) or off.
+    // Switch the second channel (L-R) on (its history starts from silence) or off.
     void enableSecond(bool on) {
         if (on && !second) std::fill(hist2.begin(), hist2.end(), 0.f);
         second = on;
@@ -196,12 +249,12 @@ public:
         int start = pos + 1; pos = (pos + 1 == K) ? 0 : pos + 1; count++; countL += L;
         // newest sample has index count-1; window = samples count-K .. count-1 (oldest first) = hist[start..start+K).
         // An output is due while nextT / L <= count - 1, i.e. nextT < L * count (countL). The phase
-        // p = nextT % L is carried along instead of divided out (build 14: the two 64-bit
-        // divisions here were a measurable part of the demodulator's cost, 300,000 times a second).
+        // p = nextT % L is carried along instead of divided out (the two 64-bit divisions this
+        // replaced were a measurable part of the demodulator's cost, 300,000 times a second).
         while (nextT < countL) {
             const float *hp = &poly[(size_t)phase * K];             // hp is stored reversed: hp[j] multiplies x[n-(K-1-j)]
             float a, b = 0;
-            if (second) vec::dot2(hp, &hist[start], &hist2[start], K, a, b);   // build 14: four taps per instruction
+            if (second) vec::dot2(hp, &hist[start], &hist2[start], K, a, b);   // four taps per instruction
             else a = vec::dot(hp, &hist[start], K);
             emit(a, b); nextT += M;
             phase += M % L; if (phase >= L) phase -= L;            // = nextT % L
@@ -213,19 +266,24 @@ private:
     bool second = false;
 };
 
-// ---- FM quieting meter (9k) -----------------------------------------------------------------
+// ---- FM quieting meter (the S-meter) -------------------------------------------------------
 // "Is there a station, and how clean is it?" - judged the way an FM receiver's noise squelch does:
 // by the NOISE in the part of the MPX (discriminator output) where a station sends nothing.
 // A station "quiets" the discriminator; with no station (or a weak one) the noise comes up.
 // Unlike the carrier level, this does not depend on the tuner gain or on other stations in the band.
+// (The carrier level was tried first and failed: the tuner's gain is set by the STRONGEST station
+// within the 1.5 MHz the dongle sees, so a perfectly listenable station could read as "no signal".)
 //
 // Measured in 60-100 kHz (above RDS at 57 kHz, below the demod's 100 kHz channel edge), split into
 // eight 5 kHz bands. SCA subcarriers (67 / 92 kHz) can fill some bands, so the QUIETEST band counts.
-// Result: dB of noise relative to 75 kHz deviation, scaled to a 25 kHz band (the 70-95 kHz reference
-// of the 2026-09-28 prototype). Measured on recordings: pure noise -8 dB, Z90 fading out -11,
+// Result: dB of noise relative to 75 kHz deviation, scaled to a 25 kHz band (the 70-95 kHz band
+// the first prototype measured, so the figures stayed comparable). Measured on recordings: pure noise -8 dB, Z90 fading out -11,
 // weak KGGI -29..-31, KZNO/KDAY -38..-39, KKLQ/KKLA -43..-46, KLOS -50 (lower = quieter = better).
 // One 1024-point FFT on every 4th block of 1024 MPX samples, averaged over ~1 s (~3 Mflop/s).
-// 11b: also a FAST reading (~0.1 s average) for the stereo blend, which must react quickly.
+// The noise measured almost FLAT across 60-100 kHz on the RTL-SDR, so no correction for the
+// textbook rising (f^2) noise of FM is needed. The screen's S-meter bars sit at 15 / 20 / 28 /
+// 36 / 44 dB of quieting (the app shows the figure positive: quieting 44 dB = -44 here).
+// Also a FAST reading (~0.1 s average) for the stereo blend, which must react quickly.
 class QuietMeter {
 public:
     static const int N = 1024;              // FFT size: 290.7 Hz bins at 297,675 S/s
@@ -254,7 +312,7 @@ public:
             double p = 0;
             for (int k = kLo[b]; k < kHi[b]; k++) p += std::norm(buf[k]);
             sum[b] += p;
-            // 11b: the fast reading - each band's density smoothed over FAST_FFTS (~0.11 s)
+            // the fast reading - each band's density smoothed over FAST_FFTS (~0.11 s)
             double d = 2.0 * p / ((double)N * winPow) / ((kHi[b] - kLo[b]) * binHz);
             if (fastCount == 0) fast[b] = d; else fast[b] += (d - fast[b]) * (1.0 / FAST_FFTS);
             fastBest = std::min(fastBest, fast[b]);
@@ -276,7 +334,7 @@ public:
         }
     }
     float db() const { return result; }                  // -99 = not measured yet (1 s average, for the S-meter)
-    float fastDb() const { return fastResult; }          // 11b: the same over ~0.1 s (for the stereo blend)
+    float fastDb() const { return fastResult; }          // the same over ~0.1 s (for the stereo blend)
 private:
     static const int FFTS_PER_RESULT = (int)(MPX_RATE / (N * EVERY));   // 72 -> one result per ~0.99 s
     static const int FAST_FFTS = 8;                                     // 8 x 13.8 ms = 0.11 s
@@ -314,10 +372,15 @@ private:
     float result = -99.f, fastResult = -99.f;
 };
 
-// ---- 11b: pilot PLL ------------------------------------------------------------------------
+// ---- Pilot PLL (phase-locked loop) --------------------------------------------------------
 // Locks a 19 kHz oscillator to the station's stereo pilot and hands out sin(2*phase),
-// the 38 kHz subcarrier the L-R signal rides on - "coherent" demodulation, as SDR#
-// does it (and unlike a free-running 38 kHz, which would let the separation wander).
+// the 38 kHz subcarrier the L-R signal rides on. The station makes its 38 kHz from the same
+// clock as the pilot, exactly twice the frequency and in a fixed phase, so a receiver that
+// copies the pilot's phase gets the subcarrier back perfectly ("coherent" demodulation, as
+// SDR# does it; a free-running 38 kHz would let the separation wander).
+// A PLL in one sentence: an oscillator of our own; a "phase detector" that measures how far
+// ahead or behind the incoming pilot it is; and a "loop filter" that nudges the oscillator's
+// speed so that error goes to zero and stays there.
 //
 // The MPX first goes through a narrow band-pass at 19 kHz (a biquad, Q 20: 950 Hz wide),
 // so the loop sees mostly the pilot. Phase detector: bandpassed x (-sin phase) -> ~(A/2) sin(error).
@@ -392,27 +455,28 @@ public:
         stage1.init(designLowpass(IQ_RATE, 100000, MPX_RATE - 100000, 60), DECIM1);
         stage2.init(designLowpass(MPX_RATE, 100000, 125000, 70), 1);
         audio.init(MPX_RATE, RESAMPLE_L, RESAMPLE_M, 15000, 19000, 60);
-        quiet.reset();                                                     // 9k
-        pll.reset();                                                       // 11b
-        rdsDec.reset();                                                    // M12
+        quiet.reset();                                                     // the S-meter
+        pll.reset();                                                       // the stereo pilot
+        rdsDec.reset();                                                    // RDS
         dcI = dcQ = 0; prevI = 1; prevQ = 0; offset = 0; level = 0; deemphL = deemphR = 0; audioOut.clear();
         dcAlpha  = (float)(1 - std::exp(-2 * M_PI * 10.0 / MPX_RATE));    // starts at a 10 Hz corner...
         dcAlphaSlow = (float)(1 - std::exp(-2 * M_PI * 0.1 / MPX_RATE)); // ...settles to 0.1 Hz (a 10 Hz notch
         dcDecay  = (float)std::exp(-std::log(100.0) / (1.0 * MPX_RATE));  // in the FM signal costs ~5 dB SNR)
         offAlpha = (float)(1 - std::exp(-1.0 / (0.5 * MPX_RATE)));        // 0.5 s
         levAlpha = (float)(1 - std::exp(-1.0 / (0.1 * MPX_RATE)));        // 0.1 s
-        deemphA  = (float)(1 - std::exp(-1.0 / (deemphUs * 1e-6 * AUDIO_RATE)));  // 75 us (11b step 2: or 50)
+        deemphA  = (float)(1 - std::exp(-1.0 / (deemphUs * 1e-6 * AUDIO_RATE)));  // 75 us (or 50, by region)
         discScale = (float)(MPX_RATE / (2 * M_PI * MAX_DEVIATION_HZ));    // rad/sample -> fraction of 75 kHz
-        // 11b: the blend
+        // the stereo -> mono blend
         stereo = 0; stereoTarget = 0; framesOut = 0;
         attackStep  = (float)(1.0 / (BLEND_ATTACK_S * AUDIO_RATE));
         releaseStep = (float)(1.0 / (BLEND_RELEASE_S * AUDIO_RATE));
         fastUntil = (long long)(BLEND_FAST_UNTIL_S * AUDIO_RATE);
     }
-    // 11b: STEREO_AUTO (default), STEREO_MONO or STEREO_FULL. Called between blocks (streaming thread).
+    // STEREO_AUTO (default), STEREO_MONO or STEREO_FULL. Called between blocks (streaming thread).
     void setStereoMode(int m) { mode = m == STEREO_MONO ? STEREO_MONO : m == STEREO_FULL ? STEREO_FULL : STEREO_AUTO; }
     int stereoMode() const { return mode; }
-    // 11b step 2: de-emphasis time constant in microseconds (75 Americas, 50 elsewhere).
+    // De-emphasis time constant in microseconds: 75 in the Americas (and South Korea), 50 in
+    // Europe, Japan and most of the world - the app picks it from the "Band (region)" setting.
     // Cheap to call every block: only recomputes when the value changes.
     void setDeemphasis(int us) {
         if (us != 50) us = 75;
@@ -422,7 +486,7 @@ public:
     }
 
     // Feed cu8 bytes (I,Q,I,Q,...). Audio appears in audioOut (append-only; caller clears).
-    // Build 14: a block at a time - each stage runs over the whole block before the next one
+    // A block at a time - each stage runs over the whole block before the next one
     // starts (the stages that are feedback loops still go sample by sample, inside their loop).
     void processCu8(const uint8_t *buf, size_t len) {
         const size_t n = len / 2;                                   // IQ samples in this block
@@ -447,7 +511,15 @@ public:
         stage2.process(m, chI.data() + 1, chQ.data() + 1);
         prevI = chI[m]; prevQ = chQ[m];
         // 5. discriminator: angle of x[n] * conj(x[n-1]), four samples at a time
-        //    (the spare slots beyond m hold whatever they hold - those results are not used)
+        //    (the spare slots beyond m hold whatever they hold - those results are not used).
+        //    Why this is FM demodulation: an FM signal is a pointer of (almost) constant length
+        //    that turns faster or slower with the audio. Multiplying a sample by the conjugate
+        //    of the one before subtracts their angles, so the result's angle is how far the
+        //    pointer turned in one sample (in radians) = the instantaneous frequency. The
+        //    length of the pointer (loud or quiet station) drops out - which is why FM shrugs
+        //    off fading and static. discScale turns radians per sample into a fraction of
+        //    75 kHz: 2 pi x 75 kHz / 297,675 rad per sample = 1.0. |x[n] x conj(x[n-1])| goes
+        //    into mag[] for the carrier level shown in the details.
         {
 #if FM_FAST_ATAN2
             const vec::f4 scale = vec::set1(discScale);
@@ -468,13 +540,14 @@ public:
         // 6. the rest, sample by sample (feedback loops and the audio path)
         for (size_t j = 0; j < m; j++) {
             float mpx = mpxBuf[j];
-            level += levAlpha * (mag[j] - level);                    // |x| smoothed -> carrier level
-            offset += offAlpha * (mpx - offset);                     // carrier offset (fraction of 75 kHz)
+            level += levAlpha * (mag[j] - level);                    // |x|^2 smoothed -> carrier level (information only)
+            offset += offAlpha * (mpx - offset);                     // carrier offset (fraction of 75 kHz): audio averages
+                                                                     // to zero over 0.5 s, a mistuning does not
             mpx -= offset;
-            quiet.push(mpx);                                         // 9k: noise in 60-100 kHz
-            pll.push(mpx);                                           // 11b: always tracks the pilot (cheap)
-            rdsDec.push(mpx);                                        // M12: RDS (57 kHz subcarrier)
-            // 11b: the L-R path runs while the pilot is there, stereo is wanted, and the blend
+            quiet.push(mpx);                                         // S-meter: noise in 60-100 kHz
+            pll.push(mpx);                                           // always tracks the pilot (cheap)
+            rdsDec.push(mpx);                                        // RDS (57 kHz subcarrier)
+            // The L-R path runs while the pilot is there, stereo is wanted, and the blend
             // hasn't reached mono (then it's switched off - nothing to compute in mono).
             bool wantD = mode != STEREO_MONO && pll.locked();
             if (wantD != audio.secondEnabled()) {
@@ -491,7 +564,7 @@ public:
             // Our PLL locks with the pilot as cos(phase) = sin(phase + 90 deg). So wt = phase + 90 deg
             // and the subcarrier sin(2wt) = sin(2 phase + 180 deg) = -sin(2 phase).  ->  MINUS.
             //
-            // History: 11b (2026-09-29) used PLUS, because with minus the analog came out
+            // History: the first stereo version (2026-09-29) used PLUS, because with minus the analog came out
             // left/right swapped against the HD1 audio from nrsc5 (KRTH, KLOS, KGGI). On 2026-10-02
             // that was turned around by three checks that don't involve nrsc5:
             //   1. a left-only test signal built from the formula above came out on the RIGHT;
@@ -517,25 +590,25 @@ public:
             });
         }
     }
-    std::vector<float> audioOut;                 // 11b: STEREO interleaved (L, R), 44,100 Hz, 1.0 = 75 kHz deviation
+    std::vector<float> audioOut;                 // STEREO interleaved (L, R), 44,100 Hz, 1.0 = 75 kHz deviation
     float freqOffsetHz() const { return offset * (float)MAX_DEVIATION_HZ; }
     float carrierDbfs() const { return level > 0 ? 10.f * std::log10(level) : -99.f; } // |x|^2 of the filtered channel, 0 dB = full-scale
-    // 9k: FM quieting - noise where the station sends nothing, dB re 75 kHz deviation in 25 kHz.
+    // FM quieting - noise where the station sends nothing, dB re 75 kHz deviation in 25 kHz.
     // Lower = better: ~-8 pure noise, ~-30 weak but listenable, ~-50 a strong local. -99 = not yet.
     float quietingDb() const { return quiet.db(); }
-    float quietingDbFast() const { return quiet.fastDb(); }             // 11b: ~0.1 s average (drives the blend)
-    // 11b: the stereo state for the UI.
+    float quietingDbFast() const { return quiet.fastDb(); }             // ~0.1 s average (drives the stereo blend)
+    // The stereo state for the screen ("ST" on the signal line, the details).
     bool pilot() const { return pll.locked(); }                          // a stereo pilot is there
     float pilotLevel() const { return pll.pilotLevel(); }                 // its amplitude, 1.0 = 75 kHz (nominal 0.08-0.10)
     float stereoAmount() const { return stereo; }                         // 0 = mono ... 1 = full stereo (the blend)
-    // M12: the RDS decoder (PI / call letters, PS, RadioText ...) - see rds.hpp.
+    // The RDS decoder (PI / call letters, PS, RadioText ...) - see rds.hpp.
     const rds::Decoder &rds() const { return rdsDec; }
     // Total delay of the analog path in seconds (filters only; not counting output buffering).
     double latencySeconds() const {
         return (stage1.groupDelay() / IQ_RATE) + (stage2.groupDelay() + 0.5) / MPX_RATE + audio.delaySamplesIn / MPX_RATE;
     }
 private:
-    // 11b: where should the blend go? Full stereo above QUIET_STEREO_DB of quieting, mono
+    // Where should the stereo blend go? Full stereo above QUIET_STEREO_DB of quieting, mono
     // below QUIET_MONO_DB, a straight line in between; mono without a pilot or in the mono setting.
     void updateTarget() {
         if (mode == STEREO_MONO || !pll.locked()) { stereoTarget = 0; return; }
@@ -545,16 +618,16 @@ private:
         stereoTarget = std::max(0.f, std::min(1.f, (q - QUIET_MONO_DB) / (QUIET_STEREO_DB - QUIET_MONO_DB)));
     }
     ComplexFirDecimator stage1, stage2; Resampler audio;
-    std::vector<float> chI, chQ, mag, mpxBuf;                             // build 14: one block's channel output, |x|, MPX
-    QuietMeter quiet;                                                     // 9k
-    PilotPll pll;                                                         // 11b
-    rds::Decoder rdsDec{MPX_RATE};                                        // M12
+    std::vector<float> chI, chQ, mag, mpxBuf;                             // one block's channel output, |x|, MPX
+    QuietMeter quiet;                                                     // the S-meter
+    PilotPll pll;                                                         // the stereo pilot
+    rds::Decoder rdsDec{MPX_RATE};                                        // RDS / RBDS
     int mode = STEREO_AUTO;
     float stereo = 0, stereoTarget = 0, attackStep = 0, releaseStep = 0;
     long long framesOut = 0, fastUntil = 0;
     float dcI, dcQ, prevI, prevQ, offset, level, deemphL, deemphR;
     float dcAlpha, dcAlphaSlow, dcDecay, offAlpha, levAlpha, deemphA, discScale;
-    int deemphUs = 75;                                                 // 11b step 2
+    int deemphUs = 75;                                                 // 75 or 50 (setDeemphasis)
 };
 
 } // namespace fm

@@ -1,11 +1,26 @@
-// aligner.hpp - measures how far the analog FM audio lags the HD1 audio (M11, 11c).
+// aligner.hpp - measures how far the analog FM audio lags the HD1 audio, and how much
+// louder or quieter it is.
 //
-// Background (decision 33): the station delays its analog audio so that a car
-// radio's HD decoder (which is slow) comes out in step with it. nrsc5 is faster
-// than a car radio, so its HD audio comes out ~2.5 s BEFORE our analog audio.
-// The figure is the station's choice (2485 ms on most LA stations, KLOS 2432 ms),
-// and so is the loudness difference (KLOS's analog is 4 dB louder). 11d needs both
-// to blend without a skip.
+// WHY THIS IS NEEDED
+// A hybrid HD Radio station sends the same programme twice: as ordinary analog FM and as
+// digital (HD1). Decoding the digital signal takes time - a receiver has to collect a few
+// seconds of it before any audio comes out (the "interleaver", which spreads every piece of
+// audio over time so a short fade can't wipe it out). So the station DELAYS its analog audio
+// by the same amount (the "diversity delay"), and a car radio's two decoders come out in step:
+// when the HD drops out, the radio fades to the analog and the listener hears the same
+// moment of the song, not a jump.
+// nrsc5 starts handing out audio sooner than a car radio's chip, so in this app the HD audio
+// comes out ~2.5 s BEFORE the matching analog audio. That gap must be measured, not assumed:
+// it is each station's own setting (2485 ms on most Los Angeles stations, but KLOS 95.5 runs
+// 2432 ms and KDAY 93.5 ~2900 ms; some drift by tens of ms from day to day), and the
+// loudness differs too (KLOS's analog was 4 dB louder than its HD). The blend (blend.hpp)
+// needs both figures to switch without a skip or a jump in volume.
+//
+// THE IDEA IN ONE PARAGRAPH: take the last 3 s of analog audio, slide it along the HD audio
+// of the last ~10 s, and at every position compute how alike the two are (a correlation
+// coefficient: 1 = identical, 0 = unrelated). Where they are most alike, that's the delay.
+// Doing that sample by sample would be slow, so the search is done first at low resolution
+// with an FFT, then refined around the best spot.
 //
 // How it works
 //   Both streams are put on ONE time line, counted in audio frames (44,100 Hz)
@@ -16,7 +31,7 @@
 //       out or adds a frame now and then so that the analog keeps the STATION's
 //       time like the HD audio does; the IQ positions are corrected by the same
 //       amount before they get here. With a good dongle that amount is ~0.)
-//     - HD: nrsc5 hands out 2,048-frame pieces at points locked to the IQ stream
+//     - HD: nrsc5 hands out 2,048-frame pieces (about 46 ms of audio each) at points locked to the IQ stream
 //       (output.c: 2 pieces per acquire block of 138,240 IQ samples). We know the
 //       IQ position of the block we were pushing when a piece arrived, so the
 //       piece's position is that block's start (exact to within one block, ~88 ms
@@ -35,6 +50,10 @@
 //   Results are collected; the reported offset is the median of the accepted
 //   ones. offsetFrames = analog frame index - HD frame index for the same sound
 //   (> 0 = HD is ahead). dMs = the same in real time (block uncertainty removed).
+//
+// Mono and 11,025 Hz are plenty: what is compared is the shape of the programme (beats,
+// syllables), not its fine detail, and the two decoders' audio is processed differently
+// anyway (the HD is a compressed codec, the analog has its own filters).
 //
 // Plain C++17, no dependencies except fmdemod.hpp's designLowpass().
 #pragma once
@@ -64,17 +83,20 @@ static const double D_MAX_SECONDS =  6.0;              // ... analog may lag HD 
 static const double HINT_BEFORE_SECONDS = 0.25;        // search window around the expected value
 static const double HINT_AFTER_SECONDS  = 0.35;        //   (a bit more after: the block uncertainty adds)
 // Measured 2026-09-27 on KRTH, KBIG, KKGO, KYSR and KLLI: 2485 ms on every one of them
-// (real time) - but KLOS (Meruelo) runs 2432 ms, so it IS the station's choice after
-// all (most of them just use the same figure). Used as the first guess; the full
+// (real time) - but KLOS runs 2432 ms, so it IS each station's choice after all (most of
+// them just use the same figure). Used as the first guess; the full
 // -1..+6 s search is the fallback, and the hint window (-0.25/+0.35 s) covers KLOS.
 static const double EXPECTED_D_SECONDS = 2.485;
-static const float  ACCEPT_CORR = 0.5f;                // below this = no match
+static const float  ACCEPT_CORR = 0.5f;                // below this = no match (two unrelated programmes give ~0-0.3;
+                                                       // the same programme 0.9+, a heavily processed HD ~0.5-0.6)
 static const int    KEEP_RESULTS = 9;                  // median over the last accepted results
-static const int    AGREE_FRAMES = 3;                  // two results this close = "ok"
+static const int    AGREE_FRAMES = 3;                  // two results this close = "ok" (3 frames = 0.07 ms)
 static const int    JUMP_FRAMES  = 200;                // a result this far from the median = the alignment changed
 static const int    NO_MATCH_AFTER = 3;                // failed attempts before we say "no match"
 
 // ---- Tiny radix-2 FFT (complex, in place) --------------------------------------------------
+// The textbook Cooley-Tukey algorithm; n must be a power of two. Only used for the coarse search,
+// a few times a minute, so a simple version is fast enough.
 inline void fft(std::vector<std::complex<float>> &x, bool inverse) {
     const size_t n = x.size();
     for (size_t i = 1, j = 0; i < n; i++) {               // bit-reversal permutation
@@ -130,7 +152,7 @@ struct Result {
     float gainDb = 0;             // analog loudness relative to HD (dB, > 0 = analog louder)
     float dMs = 0;                // offset in real time, ms (block uncertainty removed)
     bool  usedHint = false;       // searched only around the remembered value
-    float hdCover = 0;            // build 10: how much of the HD stretch that was searched held real audio
+    float hdCover = 0;            // how much of the HD stretch that was searched held real audio
                                   // (0 ... 1; the rest was missing or zero-filled by nrsc5). A failed
                                   // attempt only says "these are two different programmes" when the HD
                                   // was really there - stationid.hpp looks at this before it believes one.
@@ -200,7 +222,7 @@ public:
     // samples since the tune / 33.75, minus the frames drift.hpp's clock correction has
     // taken out of the analog audio so far - so the HD pieces are anchored on the same
     // time line the analog frames are counted on.)
-    // 11d: returns the piece's position on the time line (the frame index of its first
+    // Returns the piece's position on the time line (the frame index of its first
     // frame) - the blend keeps the HD audio in a ring indexed by the same numbers.
     long long pushHd(const int16_t *stereo, size_t count, long long blockStart, long long blockLen) {
         std::lock_guard<std::mutex> lock(m_);
@@ -225,8 +247,8 @@ public:
             hdNext_ = hdAnchor_;
             // Only THIS run's audio can be compared with the analog: what came before the
             // anchor is the gap just filled with zeros, and before that a run that sat
-            // somewhere else on the time line. (Build 9. Until then this was done for the
-            // very first run only, and measure() counted its tries against the zeros as
+            // somewhere else on the time line. (An earlier version did this for the very
+            // first run only, and measure() counted its tries against the zeros as
             // failures - three of them and the verdict was "no match", seconds before the
             // new run had enough audio to be measured at all. It rarely mattered, because
             // a new run was rare. Since hdsearch.hpp rests the HD search, every look after
@@ -267,7 +289,7 @@ public:
         return index;
     }
 
-    // 11d: the demodulator was switched on while the stream was already running
+    // The demodulator was switched on while the stream was already running
     // (Digital only -> Auto): the analog time line must stay in step with the IQ
     // time line (frame n = IQ time n * 33.75), so jump the analog counter to `frame`.
     // The history in between is zero (nothing was received) - measure() only uses
@@ -302,7 +324,7 @@ public:
         std::vector<float> tmpl, region, envA, envH;
         long long a0, s0, corr;
         bool usedHint = false;
-        float cover = 0;                                    // build 10: see Result::hdCover
+        float cover = 0;                                    // see Result::hdCover
         {
             std::lock_guard<std::mutex> lock(m_);
             const long long La = (long long)(TEMPLATE_SECONDS * FRAME_RATE);
@@ -332,7 +354,7 @@ public:
             for (size_t i = 0; i < region.size(); i++) region[i] = histH_[(size_t)(s0 / DECIM + i) % histLen_];
             envA = envA_; envH = envH_;
             corr = anchorCorrection();
-            // Build 10: how much of the HD stretch [v0, v1) is real audio? (10 ms pieces whose
+            // How much of the HD stretch [v0, v1) is real audio? (10 ms pieces whose
             // energy is exactly zero are ones nrsc5 filled in, or that never came.)
             long long bins = 0, live = 0;
             for (long long f = v0 / ENV_FRAMES * ENV_FRAMES; f + ENV_FRAMES <= v1; f += ENV_FRAMES, bins++)
@@ -340,6 +362,9 @@ public:
             cover = bins > 0 ? (float)live / (float)bins : 0.f;
         }
         // ---- 1. coarse: 2,756 Hz, FFT cross-correlation, normalised ----
+        // (Correlating at every lag costs template length x lags multiplications; via the FFT
+        // it is three transforms - the "multiply the spectra" trick. 2,756 Hz keeps it small:
+        // the 1.35 kHz low-pass in decimate() leaves enough of the programme to find it.)
         std::vector<float> ct = decimate(tmpl, COARSE_DECIM), cr = decimate(region, COARSE_DECIM);
         float rCoarse = 0; long long kCoarse = 0;
         if (!bestLag(ct, cr, 0, (long long)cr.size() - (long long)ct.size(), rCoarse, kCoarse, true))
@@ -420,8 +445,8 @@ private:
             size_t n = results_.size();
             bool agree = n >= 2 && std::llabs(results_[n - 1].offsetFrames - results_[n - 2].offsetFrames) <= AGREE_FRAMES;
             status_.state = agree ? 2 : 1;
-            // Re-measure every 5 s - but confirm a first result after 1 s already (11d:
-            // the blend waits for two agreeing results, so this gets the HD in ~1 s sooner).
+            // Re-measure every 5 s - but confirm a first result after 1 s already (the
+            // blend waits for two agreeing results, so this gets the HD in ~4 s sooner).
             nextTryFrame_ = aNext_ + (results_.size() < 2 ? 1 : 5) * FRAME_RATE;
             hintFrames_ = (long long)std::llround(status_.dMs * FRAME_RATE / 1000.0); // search near it next time
             hintFailed_ = false; failures_ = 0;
@@ -441,7 +466,8 @@ private:
         return out;
     }
 
-    // Normalised correlation of template t at lag k inside s.
+    // Normalised correlation of template t at lag k inside s: sum(t*s) / sqrt(sum(t^2) * sum(s^2)).
+    // Dividing by the energies makes it independent of loudness: 1 = the same shape.
     static double corrAt(const std::vector<float> &t, const std::vector<float> &s, long long k) {
         double num = 0, et = 0, es = 0;
         for (size_t i = 0; i < t.size(); i++) {

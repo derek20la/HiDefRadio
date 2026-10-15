@@ -39,7 +39,7 @@
 //     Suspected when a code is coming in that is not the HD station's:
 //       - the own code is known and this is a different one, or
 //       - the HD's name is a call licensed here and the analog's SURE call is a different
-//         call licensed here (KHHT analog / KSOF HD on 98.9 - the rule since M12), or
+//         call licensed here (KHHT analog / KSOF HD on 98.9 - the oldest rule, from the first RDS version), or
 //       - the HD's name is a call licensed here and this code is not that call's.
 //         (Weak on its own - wrong codes are common - so it only counts with the audio.)
 //     Confirmed when the AUDIO agrees: three alignment attempts in a row that found no
@@ -138,7 +138,7 @@ struct Status {
     std::string callMaybe;       // the formula's call that nobody vouches for
     int same = SAME_UNKNOWN;     // is the HD the same station as the analog?
     int contest = CONTEST_NONE;
-    bool strong = false;         // the contest rests on two different SURE calls (the M12 rule)
+    bool strong = false;         // the contest rests on two different SURE calls (the oldest rule)
     int ownPi = -1;              // the HD station's own RDS code (-1 = not known)
     int ownFrom = OWN_NONE;
     std::string otherName;       // the analog station's name for the screen: in a contest the OTHER
@@ -304,7 +304,7 @@ private:
         const bool callIsHd = piOk_ && !hdCall_.empty() && callSure_ && !call_.empty() && call_ == hdCall_;
         if (callIsHd) setOwn(pi_, OWN_CALL);
 
-        // "Same station?" by the calls alone - the rules since M12 / 13b / 14b, unchanged:
+        // "Same station?" by the calls alone - the rules of builds 1-9, unchanged:
         // kept until something says otherwise (a code without a US call, or no HD name yet,
         // says nothing either way).
         classicNo_ = false; weak_ = false;
@@ -353,7 +353,7 @@ private:
 
         out_.call = call_; out_.callSure = callSure_; out_.callRelay = callRelay_; out_.callMaybe = callMaybe_;
         // "Another station" is only SAID when it is confirmed, or when it rests on two sure
-        // calls (then Kotlin still waits for the aligner's "no match", as it has since 12a).
+        // calls (then Kotlin still waits for the aligner's "no match", as it always has).
         // A mere suspicion leaves the verdict where the calls put it.
         out_.same = in && (confirmed_ || strong_) ? SAME_NO : classic_;
         out_.contest = !in ? CONTEST_NONE : confirmed_ ? CONTEST_CONFIRMED : CONTEST_SUSPECTED;

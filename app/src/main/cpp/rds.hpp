@@ -1,4 +1,4 @@
-// rds.hpp - RDS / RBDS decoder for HiDef Radio (milestone 12).
+// rds.hpp - RDS / RBDS decoder for HiDef Radio: the data that names an FM station.
 //
 // Input:  the FM "MPX" signal (the discriminator output of fmdemod.hpp, 297,675 samples/s,
 //         1.0 = 75 kHz deviation).
@@ -23,8 +23,8 @@
 //   block sync + checkwords            see Sync below
 //   group parsing                      PI, PS, RT, PTY, RT+
 //
-// What makes a decoder "reliable" (Derek, 2026-09-29: "RDS in SDR# is way more reliable than
-// SDR++") is mostly what it does with the checkwords. Here every block is one of
+// What makes a decoder "reliable" (a listener's comparison that started this file: RDS in
+// SDR# feels far more trustworthy than in SDR++) is mostly what it does with the checkwords. Here every block is one of
 //   CLEAN      (checkword matches),
 //   CORRECTED  (a burst of 1-2 wrong bits was repaired - the code allows it, but a repair of
 //               pure noise "succeeds" 5 % of the time, so these are not trusted on their own),
@@ -41,7 +41,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "vec4.hpp"                                // build 14: four floats at a time
+#include "vec4.hpp"                                // four floats per instruction (NEON on arm64)
 #include <algorithm>
 
 namespace rds {
@@ -147,7 +147,7 @@ struct Status {
     long blocksClean = 0, blocksFixed = 0, blocksBad = 0;   // totals since the tune (while synced)
 };
 
-// Build 10: whose blocks came in lately? Every group starts with block A = the station's PI
+// Whose blocks came in lately? Every group starts with block A = the station's PI
 // code, 11 times a second. When two stations share a frequency (KDSC and XETRA-FM on 91.1,
 // 2026-10-09) the receiver hears whichever is stronger at the moment, and so does this
 // decoder - the confirmed PI follows with a delay (three clean blocks of the newcomer), and
@@ -177,13 +177,13 @@ public:
         nGroups = nClean = nFixed = nBad = 0;
         piOk = false; piCur = 0; piCand = 0; piCnt = 0;
         pty = -1; ptyCand = -1; ptyCnt = 0; tp = ta = false;
-        for (Seen &e : seenA) e = Seen();                 // build 10
+        for (Seen &e : seenA) e = Seen();                 // see lately()
         seenPos = 0;
         clearText();
         serial_++;
     }
 
-    // Build 10: see the Lately struct above. Cheap (64 entries), any time on the decoder's thread.
+    // See the Lately struct above. Cheap (64 entries), any time on the decoder's thread.
     Lately lately(double seconds = 3.0) const {
         Lately l;
         if (!piOk) return l;
@@ -209,7 +209,7 @@ public:
         pos = (pos + 1 == nLp) ? 0 : pos + 1;
         if (++decim < DECIM) return;
         decim = 0;
-        float zi, zq;                                    // build 14: four taps per instruction (vec4.hpp)
+        float zi, zq;                                    // four taps per instruction (vec4.hpp)
         vec::dot2(lp.data(), &hI[start], &hQ[start], nLp, zi, zq);
         baseband(zi, zq);
     }
@@ -461,7 +461,7 @@ private:
 
     void group() {
         nGroups++;
-        if (blkSt[0] == 2) { seenA[seenPos] = Seen{ bitNo, blk[0] }; seenPos = (seenPos + 1) & 63; }   // build 10: a clean block A
+        if (blkSt[0] == 2) { seenA[seenPos] = Seen{ bitNo, blk[0] }; seenPos = (seenPos + 1) & 63; }   // a clean block A (for lately())
         if (blkSt[0]) gotPi(blk[0], blkSt[0]);
         if (!piOk) return;                                   // nothing is shown before we know who it is
         if (blkSt[0] && blk[0] != piCur) return;             // somebody else's group (co-channel)
@@ -604,7 +604,7 @@ private:
     long nGroups = 0, nClean = 0, nFixed = 0, nBad = 0;
 
     bool piOk = false; uint16_t piCur = 0, piCand = 0; int piCnt = 0;
-    struct Seen { long long bit = -1; uint16_t pi = 0; };    // build 10: the last 64 clean block A's (lately())
+    struct Seen { long long bit = -1; uint16_t pi = 0; };    // the last 64 clean block A's (lately())
     Seen seenA[64]; int seenPos = 0;
     int pty = -1, ptyCand = -1, ptyCnt = 0; bool tp = false, ta = false;
     uint16_t psVal[4] = {}; int psCnt[4] = {}; long psBit[4] = {}, psSince = 0;

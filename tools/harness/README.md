@@ -219,3 +219,20 @@ verdict (0 can't tell, 1 yes, 2 no) with the analog station's name, the contest 
 `blendtest` has the blend's side of it with made-up audio: the HD alone, silence in a
 dropout and never a frame of the other station, the safety net after 10 s, "stay on analog",
 and the way back to the ordinary aligned blend.
+
+## "Comments only": objcheck.sh
+
+A change that is meant to touch only comments (the documentation pass of 2026-10-15, for one)
+must leave the program exactly as it was. `objcheck.sh` proves it: it compiles `native-lib.cpp`
+with every header, and the stand-alone tests, three ways - clang++ and g++ on the PC, and clang
+for 64-bit ARM (the phone's code path with NEON; needs `pip install ziglang`) - without debug
+information, and prints a SHA-256 for each object file.
+
+    sh build.sh                      # once (fetches the nrsc5 / librtlsdr headers)
+    sh objcheck.sh > before.txt      # on the old sources
+    ... edit ...
+    sh objcheck.sh > after.txt && diff before.txt after.txt && echo IDENTICAL
+
+Comments that move code to other lines don't show up (no line numbers in the objects); a
+change of one digit in a constant does (tried: `PILOT_OFF` 0.012 -> 0.013 changes all three
+`native-lib.o`).

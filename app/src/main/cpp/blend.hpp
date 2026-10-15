@@ -1,15 +1,29 @@
-// blend.hpp - the analog <-> HD blend for the "HD Radio: Auto" setting (M11, 11d).
+// blend.hpp - the analog <-> HD blend for the "HD Radio: Auto" setting.
 //
 // What a car radio does: play the analog FM at once, and switch to the HD audio
 // when it's there and good - without a skip, because the station delays its
 // analog by the same ~2.5 s the HD decoder needs (the "diversity delay").
 // nrsc5 is faster than a car radio, so here the HD audio comes out ~2.5 s
-// BEFORE the matching analog audio (decision 33; the exact figure and the
-// loudness difference are measured by aligner.hpp - they differ per station:
+// BEFORE the matching analog audio (the exact figure and the loudness
+// difference are measured by aligner.hpp - they differ per station:
 // KRTH 2485 ms, KLOS 2432 ms and +4.2 dB).
 //
+// THE TRICK THIS FILE IS BUILT ON - a radio that can see the future:
+//
+//     time line ->              now (what you hear)
+//     analog  ......................|............
+//     HD      .........|.......................XXXX......   (XXXX = a dropout)
+//                      |<- 2.5 s ->|
+//                 same sound as "now"         ^ known 2.5 s before it would be heard
+//
+// Because the HD audio for any moment arrives ~2.5 s before the analog audio of that
+// moment, we always hold 2.5 s of HD audio "from the future". A car radio only learns
+// about a dropout when it happens and must cover it in a hurry; here every dropout is
+// seen coming, so the blend fades to the analog BEFORE the gap, smoothly, and the
+// listener never hears the gap at all.
+//
 // So this class keeps
-//   - the analog audio (from fmdemod via native-lib; 11b: stereo) in a ring, indexed
+//   - the analog audio (from fmdemod via native-lib, stereo) in a ring, indexed
 //     by analog frame number since the tune (frame n = IQ time n * 33.75), and
 //   - the HD1 audio (stereo, from nrsc5) in a bigger ring, indexed by the
 //     aligner's time line (the same frame numbers, see Aligner::pushHd),
@@ -22,7 +36,9 @@
 // AHEAD in the HD: a dropout is known 2.5 s before it would be heard, so the
 // blend fades to analog before the gap and comes back once the next 2 s of HD
 // are clean. Output = (1 - g) * analog * gainMatch + g * HD (per channel), where g ramps
-// with a raised cosine over FADE_FRAMES (0.5 s, approved by ear in M11a) and
+// with a raised cosine over FADE_FRAMES (0.5 s, approved by ear on the first blends; a
+// raised cosine - half a cosine wave from 0 to 1 - starts and ends gently, so the fade has
+// no corner you could hear) and
 // gainMatch brings the analog to the HD's loudness (so the HD sounds exactly
 // as it does in "Digital only").
 //
@@ -31,11 +47,12 @@
 //
 // "Unaligned" HD: if the aligner never finds a match (the HD on this frequency
 // is another station's - see Radio World, "An unintended consequence of digital
-// radio"), the "unmatched HD" setting decides: play the HD anyway (offset chosen
+// radio" - or the station processes its HD so differently that the two don't
+// correlate), the "unmatched HD" setting decides: play the HD anyway (offset chosen
 // so the HD plays ~0.3 s behind live, like Digital only: a one-time jump of
 // ~2.5 s) or stay on the analog.
 //
-// Build 10 - "the HD plays alone": two stations can share a frequency (KDSC's HD and the
+// "The HD plays alone": two stations can share a frequency (KDSC's HD and the
 // analog of XETRA-FM, "91X", on 91.1 west of Los Angeles, 2026-10-09). Then the analog is
 // NOT this HD's programme, and falling back on it in every dropout swaps between two
 // stations - five times a minute that evening. stationid.hpp works out when that is the
@@ -75,7 +92,7 @@
 namespace blend {
 
 static const int RATE = 44100;
-static const size_t ANALOG_RING = (size_t)RATE * 4;       // 4 s of analog (11b: stereo frames; only ~0.3 s is ever waiting)
+static const size_t ANALOG_RING = (size_t)RATE * 4;       // 4 s of analog (stereo frames; only ~0.3 s is ever waiting)
 static const size_t HD_RING = (size_t)RATE * 6;           // 6 s of stereo: holds the ~2.5 s delay + look-ahead
 static const long long FADE_FRAMES = RATE / 2;            // 0.5 s crossfade (raised cosine)
 static const long long GUARD_FRAMES = RATE * 3 / 20;      // the fade must END this long (0.15 s) before a bad frame
@@ -93,7 +110,7 @@ static const float MAX_MATCH_DB = 12.0f;                  // never scale the ana
 // (Tuned on 20 recordings with the antenna moved every ~10 s, 2026-09-28: 5/15/30 s and a
 //  60 s reset kept the analog playing far longer than the dropouts themselves.)
 static const long long DWELL_FRAMES[] = { 0, RATE * 3, RATE * 8, RATE * 15 };
-// Build 10, "the HD plays alone" (see the top of the file):
+// "The HD plays alone" (see the top of the file):
 static const long long ALONE_FIRST_GOOD = RATE * 2;       // the HD must have been good this long before it comes in
 static const long long ALONE_NET_FRAMES = RATE * 10;      // this much silence -> the other station's analog is given back
 static const long long ALONE_NET_GOOD = RATE * 5;         // ... and the HD must then be good this long to return
@@ -107,7 +124,7 @@ static const long long ALONE_FAST = 4;                    // fade to / from sile
 
 enum State { ANALOG = 0, TO_HD = 1, HD = 2, TO_ANALOG = 3 };
 
-// M12 step 2: "is the HD the same station as the analog?" (setSameStation)
+// "Is the HD the same station as the analog?" (setSameStation)
 enum SameStation { SAME_UNKNOWN = 0, SAME_YES = 1, SAME_NO = 2 };
 
 struct Status {
@@ -119,7 +136,7 @@ struct Status {
     long long hdSince = 0;        // frames since the current HD stretch began (0 when not on HD)
     float matchDb = 0;            // the analog level correction in use (dB, negative = turned down)
     std::string reason;           // why the last fade happened (for the details)
-    // Build 10: the analog on this frequency is another station's (setAnalogForeign)
+    // The analog on this frequency is another station's (setAnalogForeign)
     bool alone = false;           // ... and the HD stands alone: it plays, or the silence waits for it
     bool silent = false;          // ... the silence is waiting right now
     long long silentFrames = 0;   // ... for this long
@@ -142,7 +159,7 @@ public:
         state_ = ANALOG; ramp_ = 0; offset_ = 0; aligned_ = false;
         returns_ = 0; dwellUntil_ = 0; hdStreak_ = 0;
         matchDb_ = 0; matchTargetDb_ = 0;
-        alone_ = false; heardAnalog_ = true; aGain_ = 1.0f; rampStep_ = 1;     // build 10
+        alone_ = false; heardAnalog_ = true; aGain_ = 1.0f; rampStep_ = 1;     // "the HD plays alone" 
         hdGoodRun_ = 0; silentFrames_ = 0; needGood_ = ALONE_FIRST_GOOD;
         st_ = Status();
     }
@@ -153,8 +170,8 @@ public:
         unmatchedPlaysHd_ = yes;
     }
 
-    // M12 step 2: is the HD the same station as the analog? Judged by native-lib from the
-    // analog's RDS PI and the HD's call sign: SAME_UNKNOWN / SAME_YES / SAME_NO. Only matters
+    // Is the HD the same station as the analog? Judged by native-lib (stationid.hpp) from the
+    // analog's RDS PI code and the HD's call sign: SAME_UNKNOWN / SAME_YES / SAME_NO. Only matters
     // when the aligner finds NO match: SAME_YES = it's this station's HD, just processed so
     // differently that the audio doesn't correlate (KKLQ) -> play it whatever the setting
     // says; otherwise the "unmatched HD" setting decides, as before. A match always wins
@@ -164,7 +181,7 @@ public:
         sameStation_ = verdict;
     }
 
-    // Build 10: the analog on this frequency is ANOTHER station's than the HD (judged by
+    // The analog on this frequency is ANOTHER station's than the HD (judged by
     // stationid.hpp from the RDS codes and the audio) - see "the HD plays alone" at the top.
     // Not cleared by reset() - native-lib sets it on every tune, like setSameStation.
     void setAnalogForeign(bool yes) {
@@ -172,7 +189,7 @@ public:
         foreign_ = yes;
     }
 
-    // Streaming thread: analog audio as it comes out of the demodulator (11b: stereo,
+    // Streaming thread: analog audio as it comes out of the demodulator (stereo,
     // interleaved L R, `frames` frames; already scaled and clamped to -1..1 - the
     // aligner gets the same audio as mono).
     void pushAnalog(const float *stereo, size_t frames) {
@@ -197,7 +214,7 @@ public:
         // A gap (first audio, or a new run after a sync loss): those frames were never received.
         for (long long f = std::max(hdFrontier_, index - (long long)HD_RING); f < index; f++)
             hdGood_[(size_t)(f % (long long)HD_RING)] = 0;
-        if (index > hdFrontier_) hdGoodRun_ = 0;          // build 10: a gap ends the run of good HD
+        if (index > hdFrontier_) hdGoodRun_ = 0;          // a gap ends the run of good HD
         // A piece that is all zero is one nrsc5 filled in for a missing or damaged
         // packet (or a sync loss): a dropout, not music.
         bool silent = true;
@@ -210,7 +227,7 @@ public:
         }
         hdFrontier_ = index + (long long)frames;
         hdOldest_ = std::max(hdOldest_, hdFrontier_ - (long long)HD_RING);
-        hdGoodRun_ = silent ? 0 : hdGoodRun_ + (long long)frames;   // build 10: how long the HD has been good without a break
+        hdGoodRun_ = silent ? 0 : hdGoodRun_ + (long long)frames;   // how long the HD has been good without a break
     }
 
     // The demodulator was switched on while the stream was already running
@@ -246,7 +263,7 @@ public:
             restart_ = false;
             if (state_ != ANALOG) { state_ = ANALOG; ramp_ = 0; }   // start on the analog...
             hdStreak_ = 0; dwellUntil_ = 0;
-            // 13b step 2: ...unless the HD is ready this very moment (see decide): coming back
+            // ...unless the HD is ready this very moment (see decide): coming back
             // to HD1 from a sub-channel, the aligner still has its measurement and the HD ring
             // kept filling, so the first decide() below puts us straight on the HD - no detour
             // through 0.5 s of analog and a crossfade. After a tune nothing is measured yet,
@@ -264,9 +281,9 @@ public:
         // Level match (analog -> HD loudness), aimed at the aligner's measurement.
         if (al.accepted > 0) matchTargetDb_ = std::max(-MAX_MATCH_DB, std::min(MAX_MATCH_DB, -al.gainDb));
         else matchTargetDb_ = 0;
-        if (foreign_) matchTargetDb_ = 0;                 // build 10: that measurement belongs to another programme
+        if (foreign_) matchTargetDb_ = 0;                 // that measurement belongs to another programme
         decide(al);                                       // state changes, once per read (every ~46 ms)
-        const float aTarget = heardAnalog_ ? 1.0f : 0.0f; // build 10: the analog leg, heard or muted
+        const float aTarget = heardAnalog_ ? 1.0f : 0.0f; // the analog leg, heard or muted
         const float aStep = 1.0f / (float)FADE_FRAMES;
 
         const float slew = GAIN_SLEW_DB_PER_S / RATE;
@@ -276,14 +293,14 @@ public:
             else if (matchDb_ > matchTargetDb_) matchDb_ = std::max(matchTargetDb_, matchDb_ - slew);
             if (i % 441 == 0) matchLin_ = std::pow(10.0f, matchDb_ / 20.0f);   // dB -> factor, every 10 ms is plenty
             size_t aslot = (size_t)(play_ % (long long)ANALOG_RING);
-            float l = analog_[aslot * 2] * matchLin_, r = analog_[aslot * 2 + 1] * matchLin_;   // 11b: stereo
-            if (aGain_ != 1.0f || aTarget != 1.0f) {      // build 10: only when the analog is (being) muted
+            float l = analog_[aslot * 2] * matchLin_, r = analog_[aslot * 2 + 1] * matchLin_;   // stereo
+            if (aGain_ != 1.0f || aTarget != 1.0f) {      // only when the analog is (being) muted
                 if (aGain_ < aTarget) aGain_ = std::min(aTarget, aGain_ + aStep);
                 else if (aGain_ > aTarget) aGain_ = std::max(aTarget, aGain_ - aStep);
                 l *= aGain_; r *= aGain_;
             }
             if (state_ != ANALOG) {
-                // the blend ramp: 0 = analog, 1 = HD (build 10: rampStep_ is 1, or 4 to and from silence)
+                // the blend ramp: 0 = analog, 1 = HD (rampStep_ is 1, or 4 to and from silence)
                 if (state_ == TO_HD && ramp_ < FADE_FRAMES) ramp_ = std::min(FADE_FRAMES, ramp_ + rampStep_);
                 else if (state_ == TO_ANALOG && ramp_ > 0) ramp_ = std::max(0LL, ramp_ - rampStep_);
                 float g = 0.5f - 0.5f * std::cos((float)M_PI * (float)ramp_ / (float)FADE_FRAMES);
@@ -300,7 +317,7 @@ public:
                     state_ = ANALOG;
                     // Came back to analog: wait before trying HD again (longer each time it
                     // happens again soon - a signal on the edge would otherwise flap).
-                    if (alone_) { silentFrames_ = 0; }    // build 10: no waiting times while the HD stands alone
+                    if (alone_) { silentFrames_ = 0; }    // no waiting times while the HD stands alone
                     else {
                     if (hdStreak_ >= HD_HELD_RESET) returns_ = 0;
                     if (reversible_) {                    // came back because of a dropout
@@ -316,7 +333,7 @@ public:
             out[2 * i + 1] = clip(r);
             play_++;
         }
-        // Build 10: the silence is counted while it lasts (decideAlone's safety net reads it).
+        // The silence is counted while it lasts (decideAlone's safety net reads it).
         const bool silentNow = alone_ && !heardAnalog_ && state_ == ANALOG;
         if (silentNow) silentFrames_ += (long long)n;
         st_.alone = alone_ && !heardAnalog_;
@@ -371,9 +388,9 @@ private:
         bool alignedOk = al.state == 2;
         bool noMatch = al.state == 3 && play_ >= NOMATCH_FRAMES;
         st_.mismatch = noMatch;
-        bool resume = resume_;                            // 13b step 2: the first decision after a (re)start
+        bool resume = resume_;                            // the first decision after a (re)start
         resume_ = false;
-        if (foreign_ || alone_) { decideAlone(resume); return; }   // build 10: the analog is another station's
+        if (foreign_ || alone_) { decideAlone(resume); return; }   // the analog is another station's
         if (state_ == ANALOG) {
             if (play_ < dwellUntil_) return;
             if (alignedOk) {
@@ -390,6 +407,10 @@ private:
             return;
         }
         // On HD, or fading either way: anything wrong ahead -> (keep) fading to analog.
+        // "Ahead" = the next 0.65 s of HD (the 0.5 s fade + 0.15 s guard), so the fade is
+        // finished before the gap arrives. "Re-aligning": the aligner's figure moved (after a
+        // sync loss nrsc5 can come back a whole 2,048-frame piece later) - fade out, take the
+        // new figure, fade back in, instead of jumping in the middle of the HD.
         long long look = aligned_ ? FADE_FRAMES + GUARD_FRAMES : UNALIGNED_CLEAN;
         bool bad = !hdClean(play_ - offset_, look);
         bool realign = aligned_ && alignedOk && std::llabs(al.offsetFrames - offset_) > OFFSET_TOLERANCE;
@@ -405,7 +426,7 @@ private:
         }
     }
 
-    // Build 10: the decisions while the analog on this frequency is another station's
+    // The decisions while the analog on this frequency is another station's
     // ("the HD plays alone", top of the file). Called with m_ held, once per read().
     // heardAnalog_ says what fills the place of the HD when it is not there: the other
     // station's analog (true - at the start, after the safety net, with "stay on analog",
@@ -479,9 +500,9 @@ private:
     int returns_ = 0; long long dwellUntil_ = 0, hdStreak_ = 0;
     float matchDb_ = 0, matchTargetDb_ = 0, matchLin_ = 1.0f;
     bool unmatchedPlaysHd_ = true; bool reversible_ = false;
-    bool resume_ = false;                                 // 13b step 2: a (re)start is waiting for its first decide()
-    int sameStation_ = SAME_UNKNOWN;                      // M12 step 2
-    // Build 10 ("the HD plays alone")
+    bool resume_ = false;                                 // a (re)start is waiting for its first decide()
+    int sameStation_ = SAME_UNKNOWN;                      // setSameStation
+    // "The HD plays alone"
     bool foreign_ = false;                                // the analog is another station's (setAnalogForeign)
     bool alone_ = false;                                  // ... and decideAlone() is in charge
     bool heardAnalog_ = true;                             // what stands in for the HD: the analog (true) or silence
