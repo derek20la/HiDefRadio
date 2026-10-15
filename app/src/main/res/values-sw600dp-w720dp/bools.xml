@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Build 15: a tablet at least 720 dp wide gets the two-pane layout (layout-sw600dp-w720dp/activity_main.xml). -->
+<resources>
+    <bool name="two_pane">true</bool>
+</resources>

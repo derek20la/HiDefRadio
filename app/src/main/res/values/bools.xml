@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Build 15: false on phones. values-sw600dp-w720dp/bools.xml sets it true on screens whose
+     SMALLEST side is at least 600 dp (a tablet - never a phone) AND that are at least 720 dp wide
+     right now, where layout-sw600dp-w720dp/activity_main.xml
+     puts the signal details in a pane of their own. -->
+<resources>
+    <bool name="two_pane">false</bool>
+</resources>

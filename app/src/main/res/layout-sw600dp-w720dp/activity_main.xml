@@ -1,0 +1,601 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Build 15: the TABLET layout, for a screen that is a tablet (smallest side >= 600 dp, "sw600dp")
+     AND at least 720 dp wide right now ("w720dp"). So: a 10-11" tablet in either orientation, an
+     8" tablet in landscape. An 8" tablet in portrait (~600 dp wide) would get two halves of
+     ~265 dp - narrower than any phone - so it keeps the phone layout (layout/activity_main.xml),
+     as do all phones in either orientation. Turning the tablet re-creates the screen, so the
+     layout follows the orientation by itself. Two panes:
+
+       +===============================+============================+
+       | ❮ [ 101.1 HD MHz ] ❯  ⏸/⏹     | Signal details             |
+       | HD1 HD2                    ⚙  | Station   KRTH · Los Ang…  |
+       | [fav] [fav] [fav] [fav]       | Sync      synced, MP1      |
+       | [   big logo / album art  ]   | MER       14.6 / 14.0      |
+       | KRTH                       ☆  | ...                        |
+       | HD1 · Adult Hits              | [Show debug info]          |
+       | Song title / artist           |  (debug text, speed test)  |
+       | ● HD MP1  MER 14.6 / 14.0     |                            |
+       +===============================+============================+
+
+     EVERY VIEW ID OF THE PHONE LAYOUT IS HERE TOO, so ViewBinding makes one binding class and
+     MainActivity works with either file. The views are the phone layout's, copied; what differs:
+     - the details table (signal_table) and the debug views sit in the right pane, with their
+       own scrolling; MainActivity (R.bool.two_pane) keeps the table open all the time, so
+       the signal line is not a button here and its ▾ arrow is hidden;
+     - bigger: the VFD digits 56 sp (fitVfd knows), the picture 320 dp, the station name, the
+       song lines, the signal line, the details text.
+     If you change the phone layout, change this one the same way (same ids!). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:baselineAligned="false"
+    android:orientation="horizontal"
+    android:padding="16dp"
+    tools:context=".MainActivity">
+
+    <!-- ===================== LEFT PANE: the radio ===================== -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- ❮  [ 101.1 MHz ]  ❯  ⏸/⏹ stacked   (9h: chevron icons + the play/stop buttons) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- 9h: drawn chevrons instead of text glyphs (which Android draws
+                     small). Icon-only MaterialButtons, as tall as the VFD panel.
+                     (Chevrons, not triangles: a solid ▶ now means Play.) -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/tune_down"
+                    android:layout_width="46dp"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/tune_down"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    app:cornerRadius="10dp"
+                    app:icon="@drawable/ic_chevron_left"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconSize="36dp" />
+
+                <!-- The VFD. Two copies of the digits sit on top of each other:
+                     vfd_ghost = "888.8" in a very dim color (the unlit segments)
+                     vfd_freq  = the real frequency, bright, with a glow (shadow).
+                     In the DSEG7 font "!" is a blank digit and "." takes no room,
+                     so " 99.1" is written "!99.1" and lines up with "888.8". -->
+                <LinearLayout
+                    android:id="@+id/vfd_panel"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/vfd_panel"
+                    android:clickable="true"
+                    android:contentDescription="@string/vfd_description"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingStart="6dp"
+                    android:paddingTop="12dp"
+                    android:paddingEnd="6dp"
+                    android:paddingBottom="12dp">
+
+                    <FrameLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content">
+
+                        <TextView
+                            android:id="@+id/vfd_ghost"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/dseg7_classic_bold"
+                            android:includeFontPadding="false"
+                            android:padding="4dp"
+                            android:text="888.8"
+                            android:textColor="@color/vfd_ghost"
+                            android:textSize="56sp" />
+
+                        <TextView
+                            android:id="@+id/vfd_freq"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/dseg7_classic_bold"
+                            android:includeFontPadding="false"
+                            android:padding="4dp"
+                            android:shadowColor="@color/vfd_glow"
+                            android:shadowRadius="14"
+                            android:text="101.1"
+                            android:textColor="@color/vfd_on"
+                            android:textSize="56sp" />
+                    </FrameLayout>
+
+                    <!-- Small "HD" (lit while synced) above "MHz". Build 7: one line each, always -
+                         on a narrow phone "MHz" broke into "MH" / "z"; MainActivity.fitVfd()
+                         now shrinks the digits when the room is short. -->
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/vfd_hd"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:maxLines="1"
+                            android:shadowColor="@color/vfd_glow"
+                            android:shadowRadius="8"
+                            android:text="@string/vfd_hd"
+                            android:textColor="@color/vfd_ghost"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/vfd_unit"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:maxLines="1"
+                            android:shadowColor="@color/vfd_glow"
+                            android:shadowRadius="8"
+                            android:text="@string/mhz"
+                            android:textColor="@color/vfd_on"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/tune_up"
+                    android:layout_width="46dp"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/tune_up"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    app:cornerRadius="10dp"
+                    app:icon="@drawable/ic_chevron_right"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconSize="36dp" />
+
+                <!-- 9h: the same buttons as the notification (Derek: "notification =
+                     main app"). ⏸ while playing, ▶ while paused - and ▶ = Start radio
+                     while the radio is off. ⏹ = stop the radio (dimmed while off).
+                     9h step 2 (Derek's idea): stacked, ⏸ over ⏹, in a 40 dp column
+                     that lines up with the ⚙ below it - three in a column at the right
+                     edge. Also leaves more room for the VFD on narrow phones.
+                     9i: the icons sit 12 dp from the right edge of the 40 dp buttons
+                     (centre line of the column) instead of 20 dp, using tightly cropped
+                     icons (ic_btn_*) and more padding on the left than the right - so
+                     the gap to the screen edge looks the same as on the left side (the
+                     touch areas stay 40 dp wide). The ⚙ below uses the same centre line. -->
+                <LinearLayout
+                    android:layout_width="40dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="4dp"
+                    android:orientation="vertical">
+
+                    <ImageButton
+                        android:id="@+id/pause_button"
+                        android:layout_width="40dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/pause"
+                        android:paddingStart="20dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingBottom="4dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_btn_play"
+                        app:tint="?attr/colorControlNormal" />
+
+                    <ImageButton
+                        android:id="@+id/stop_button"
+                        android:layout_width="40dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/stop"
+                        android:paddingStart="21dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="5dp"
+                        android:paddingBottom="4dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_btn_stop"
+                        app:tint="?attr/colorControlNormal" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Milestone 9b: one button per program on the air (HD1, HD2, ...).
+                 MainActivity creates the buttons in code, because the number of
+                 programs depends on the station (1 to 8). Scrolls sideways if they
+                 don't fit. baselineAligned="false" keeps 1-line and 2-line buttons
+                 lined up.
+                 9e step 3: the ⚙ settings button sits at the right end of this
+                 row (it used to have a row of its own at the top - wasted space).
+                 The buttons scroll; the ⚙ stays put. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:minHeight="40dp"
+                android:orientation="horizontal">
+
+                <HorizontalScrollView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/program_row"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:baselineAligned="false"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <ImageButton
+                    android:id="@+id/settings_button"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="4dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/settings"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="0dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_settings" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- The rest of the radio scrolls if it has to (a tablet in landscape with a long
+             song title); the sticky bar works as on a phone. -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <ScrollView
+                android:id="@+id/scroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <HorizontalScrollView
+                        android:id="@+id/preset_scroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/preset_row"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal" />
+                    </HorizontalScrollView>
+
+                    <TextView
+                        android:id="@+id/preset_hint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:alpha="0.6"
+                        android:text="@string/preset_hint"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+
+                    <ImageView
+                        android:id="@+id/now_image"
+                        android:layout_width="match_parent"
+                        android:layout_height="320dp"
+                        android:layout_marginTop="16dp"
+                        android:contentDescription="@string/now_image"
+                        android:scaleType="fitCenter"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:id="@+id/station_row"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/station_logo"
+                            android:layout_width="44dp"
+                            android:layout_height="44dp"
+                            android:layout_marginEnd="12dp"
+                            android:contentDescription="@string/station_logo"
+                            android:scaleType="fitCenter"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/station_name"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:textAppearance="?attr/textAppearanceHeadline4"
+                            android:textSize="40sp"
+                            tools:text="KRTH" />
+
+                        <!-- 9e step 1: ☆ = not a preset (tap to save), ★ = a preset (tap to remove) -->
+                        <TextView
+                            android:id="@+id/preset_star"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:clickable="true"
+                            android:contentDescription="@string/preset_add"
+                            android:focusable="true"
+                            android:gravity="center"
+                            android:text="☆"
+                            android:textSize="28sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/program_name"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceSubtitle1"
+                        android:textColor="?attr/colorSecondary"
+                        android:textSize="19sp"
+                        tools:text="HD1 · Adult Hits" />
+
+                    <!-- 9h: why the radio is silent ("⏸ Paused - headphones
+                         disconnected" + when it will turn off), or, while the radio
+                         is off with no dongle, "Plug in the RTL-SDR". Hidden otherwise. -->
+                    <TextView
+                        android:id="@+id/status_hint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textAppearance="?attr/textAppearanceBody1"
+                        android:visibility="gone"
+                        tools:text="⏸ Paused - headphones disconnected" />
+
+                    <TextView
+                        android:id="@+id/song_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:textAppearance="?attr/textAppearanceHeadline6"
+                        android:textSize="24sp"
+                        tools:text="If You Leave" />
+
+                    <TextView
+                        android:id="@+id/song_artist"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceBody1"
+                        android:textSize="19sp"
+                        tools:text="OMD" />
+
+                    <!-- 9e step 3: only while the radio is off (after Stop, or when
+                         the dongle wasn't found): starts it again - no need to replug
+                         the dongle or close the app. -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/start_button"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center_horizontal"
+                        android:layout_marginTop="16dp"
+                        android:paddingStart="24dp"
+                        android:paddingEnd="24dp"
+                        android:text="@string/start_radio"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:id="@+id/signal_box"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                                            android:orientation="vertical"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <!-- ● green = synced, amber = holding (grace period),
+                                 red = lost, grey = searching / radio off -->
+                            <TextView
+                                android:id="@+id/signal_dot"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="8dp"
+                                android:text="●"
+                                android:textColor="@color/signal_off"
+                                android:textSize="16sp" />
+
+                            <TextView
+                                android:id="@+id/signal_line"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:fontFamily="monospace"
+                                android:textSize="15sp"
+                                tools:text="HD MP1  MER 14.6 / 14.0  BER 0.01%" />
+
+                            <TextView
+                                android:id="@+id/signal_arrow"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:text="▾"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/other_hd_notice"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="?attr/selectableItemBackground"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingStart="24dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="8dp"
+                        android:textColor="@color/signal_holding"
+                        android:textSize="15sp"
+                        android:visibility="gone"
+                        tools:text="⚠ The HD here is KSOF (another station) - tap to listen"
+                        tools:visibility="visible" />
+                </LinearLayout>
+            </ScrollView>
+
+            <LinearLayout
+                android:id="@+id/now_sticky"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top"
+                android:background="?android:attr/colorBackground"
+                android:clickable="true"
+                android:elevation="4dp"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="6dp"
+                android:paddingBottom="8dp"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <ImageView
+                    android:id="@+id/sticky_logo"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="12dp"
+                    android:contentDescription="@string/station_logo"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/sticky_song"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textAppearance="?attr/textAppearanceSubtitle1"
+                        android:textStyle="bold"
+                        tools:text="If You Leave – OMD" />
+
+                    <TextView
+                        android:id="@+id/sticky_station"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textAppearance="?attr/textAppearanceBody2"
+                        android:textColor="?attr/colorSecondary"
+                        tools:text="KRTH · HD1 · Adult Hits" />
+                </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- a thin line between the panes -->
+    <View
+        android:layout_width="1dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="20dp"
+        android:alpha="0.15"
+        android:background="?attr/colorOnSurface" />
+
+    <!-- ===================== RIGHT PANE: the signal details, always open ===================== -->
+    <ScrollView
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="10dp"
+                android:text="@string/details_heading"
+                android:textAppearance="?attr/textAppearanceHeadline6" />
+
+            <!-- MainActivity fills in the rows (14 sp here, 12 on a phone). shrinkColumns="1" =
+                 long values wrap. -->
+            <TableLayout
+                android:id="@+id/signal_table"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:shrinkColumns="1" />
+
+            <Button
+                android:id="@+id/debug_toggle"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/show_debug" />
+
+            <TextView
+                android:id="@+id/sample_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textIsSelectable="true"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <!-- Build 12: the speed test (shown with the debug text). Its progress and
+                 result appear at the end of the debug text above. -->
+            <Button
+                android:id="@+id/speed_test"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/speed_test"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

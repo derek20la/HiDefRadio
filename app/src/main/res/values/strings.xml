@@ -25,6 +25,7 @@
     <string name="hide_debug">Hide debug info</string>
     <!-- Build 12: the speed test button in the debug info -->
     <string name="speed_test">Run speed test</string>
+    <string name="details_heading">Signal details</string>          <!-- build 15: title of the tablet details pane -->
     <string name="speed_test_no_radio">Start the radio first</string>
     <string name="signal_off">Radio off</string>
     <string name="signal_searching">Searching for HD… %1$s</string>

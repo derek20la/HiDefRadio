@@ -148,6 +148,10 @@ class MainActivity : AppCompatActivity() {
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
     private var detailsOpen = false
+    // Build 15: a tablet at least 720 dp wide (smallest side >= 600 dp, width >= 720 dp right now) uses
+    // layout-sw600dp-w720dp/activity_main.xml, where the details have a pane of their own and are
+    // always open. From res/values(-sw600dp-w720dp)/bools.xml - always the same answer as the layout.
+    private val twoPane by lazy { resources.getBoolean(R.bool.two_pane) }
 
     // M10c step 3: "synced but decoding badly" (amber dot + "weak").
     private var lastCrcErrors = 0L          // the program's CRC error count last second
@@ -525,7 +529,8 @@ class MainActivity : AppCompatActivity() {
                           (column.layoutParams as ViewGroup.MarginLayoutParams).marginStart + 2 * metrics.density
         val ghost = binding.vfdGhost
         val padding = ghost.paddingLeft + ghost.paddingRight
-        val fullSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, VFD_DIGITS_SP, metrics)
+        val digitsSp = if (twoPane) VFD_DIGITS_TABLET_SP else VFD_DIGITS_SP     // build 15
+        val fullSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, digitsSp, metrics)
         val wanted = TextPaint(ghost.paint).apply { textSize = fullSize }.measureText(ghost.text.toString())
         val fits = room - columnWidth - padding
         val size = if (wanted <= fits) fullSize else maxOf(fullSize / 2, fullSize * fits / wanted)
@@ -830,9 +835,11 @@ class MainActivity : AppCompatActivity() {
         }
         binding.otherHdNotice.visibility = if (other) View.VISIBLE else View.GONE
 
-        binding.signalArrow.text = if (detailsOpen) "▴" else "▾"
-        binding.signalTable.visibility = if (detailsOpen) View.VISIBLE else View.GONE
-        if (detailsOpen) showDetails(signalDetails(running, s, weak))
+        // Build 15: on a tablet the details are always open (their own pane; the arrow is hidden there).
+        val open = detailsOpen || twoPane
+        binding.signalArrow.text = if (open) "▴" else "▾"
+        binding.signalTable.visibility = if (open) View.VISIBLE else View.GONE
+        if (open) showDetails(signalDetails(running, s, weak))
     }
 
     /**
@@ -890,15 +897,16 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showDetails(rows: List<Pair<String, String>>) {
         val table = binding.signalTable
+        val detailsSp = if (twoPane) 14f else 12f               // build 15: a step bigger on a tablet
         if (table.childCount != rows.size) {
             table.removeAllViews()
             for (i in rows.indices) {
                 val name = TextView(this)
-                name.textSize = 12f
+                name.textSize = detailsSp
                 name.alpha = 0.7f                                   // a bit dimmer than the values
                 name.setPadding(0, 0, dpToPx(16), dpToPx(3))
                 val value = TextView(this)
-                value.textSize = 12f
+                value.textSize = detailsSp
                 value.setPadding(0, 0, 0, dpToPx(3))
                 val row = TableRow(this)
                 row.addView(name)
@@ -1238,7 +1246,9 @@ class MainActivity : AppCompatActivity() {
             RadioService.instance?.listenToOtherStation()
             refreshScreen()
         }
-        binding.signalBox.setOnClickListener {
+        // Build 15: on a tablet the box is not a button (the details pane is always open);
+        // detailsOpen keeps the phone's choice for when the app is next opened on a phone.
+        if (!twoPane) binding.signalBox.setOnClickListener {
             detailsOpen = !detailsOpen
             prefs.edit().putBoolean(KEY_DETAILS_OPEN, detailsOpen).apply()
             refreshScreen()
@@ -1921,6 +1931,7 @@ class MainActivity : AppCompatActivity() {
         // 9d: remembers whether the signal details / debug text are open.
         private const val UI_PREFS = "ui"
         private const val VFD_DIGITS_SP = 44f           // the frequency digits at full size (as in activity_main.xml)
+        private const val VFD_DIGITS_TABLET_SP = 56f    // build 15: the same on a tablet (layout-sw600dp-w720dp/activity_main.xml)
         private const val KEY_DETAILS_OPEN = "details_open"
         private const val KEY_DEBUG_OPEN = "debug_open"
     }

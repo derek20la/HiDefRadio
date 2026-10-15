@@ -39,6 +39,7 @@ No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see com
 
 - A "now playing" screen with a glowing VFD-style frequency display, station name, program, title and artist, album art and station logos.
 - **Favorites** as a scrolling strip of logo tiles. Tap ☆ to save the current station and program, hold a tile and drag it to change the order, and long-press to rename or delete. Logos are cached, so the tiles show them before a station sends them again.
+- On a tablet the screen splits in two: the radio on the left, the signal details always open on the right.
 - Plays in the background with the screen off.
 - Media controls in the notification, on the lock screen, and from headsets, Bluetooth and car radios. ⏮ ⏭ jump between favorites. Pause keeps the tuner running, so playback resumes live right away. The radio stops by itself after a pause (5 minutes by default) and pauses when you unplug headphones.
 - You choose what happens when another app plays sound: mute and resume, stop, or play along.
