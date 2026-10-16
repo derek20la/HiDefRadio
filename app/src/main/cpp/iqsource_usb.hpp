@@ -18,6 +18,11 @@
 //   - The V4 (tuner R828D) tunes AM by switching in its own upconverter below 28.8 MHz -
 //     the driver does it, the app just asks for 1260 kHz. It recognises a V4 by its USB
 //     names ("RTLSDRBlog" / "Blog V4"), which rtlsdr_open_fd reads like rtlsdr_open does.
+//   - The V4 Lite ("Blog V4L", tuner R828S - an R828D with one RF input fewer) has the same
+//     upconverter. The R828S answers like an R820T, so the driver reports RTLSDR_TUNER_R820T for
+//     it and goes by the USB names instead ("RTLSDRBlog" / "Blog V4L"): no direct sampling, the
+//     V4L's own input switching. The app shows it as an R828S (build 20, tunerLabel()).
+//     Supported since the fork's commit 61d9927 (2026-03-19), which our copy has.
 //   - The V3 and other R820T dongles go to DIRECT SAMPLING below 24 MHz by themselves
 //     (input Q); directSampling() reports it after each tune, and the radio then makes no
 //     gain calls at all (decision 54).
@@ -29,6 +34,7 @@
 #include "iqsource.hpp"
 #include "rtl-sdr.h"          // librtlsdr (with our rtlsdr_open_fd patch)
 #include <android/log.h>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -62,13 +68,14 @@ public:
         int gainCount = rtlsdr_get_tuner_gains(dev, nullptr);  // nullptr = just count them
 
         IQ_USB_LOGI("Opened! manufacturer='%s' product='%s' serial='%s'", manufact, product, serial);
-        IQ_USB_LOGI("Tuner: %s, %d gain steps", tunerName(tuner), gainCount);
+        const std::string tunerText = tunerLabel(tuner, manufact, product);   // build 20: "R828S" on a V4L
+        IQ_USB_LOGI("Tuner: %s, %d gain steps", tunerText.c_str(), gainCount);
 
         // The text the app shows under "Show debug info" - word for word as before build 17
         // (testers send screenshots of it; "Blog V3" / "R820T" in it tells the dongles apart).
         src->describe_ = "librtlsdr: opened OK\n";
         src->describe_ += std::string(manufact) + " " + product + " (serial " + serial + ")\n";
-        src->describe_ += "Tuner: " + std::string(tunerName(tuner)) + "\n";
+        src->describe_ += "Tuner: " + tunerText + "\n";
         src->describe_ += "Gain steps: " + std::to_string(gainCount);
         *report = src->describe_;
         return src;
@@ -135,6 +142,18 @@ private:
             case RTLSDR_TUNER_R828D:  return "Rafael Micro R828D";
             default:                  return "unknown";
         }
+    }
+
+    // Build 20: the tuner's name as the app shows it. The same as tunerName(), except for the
+    // RTL-SDR Blog V4 Lite: the driver reports its R828S as an R820T (see the top of this file),
+    // and "Tuner: Rafael Micro R820T" would read like a V3. Recognised exactly the way the driver
+    // does it (rtlsdr_check_dongle_model: both USB names equal), from the names read above - so
+    // no extra driver call (the harness's RTLTRACE call list stays the same).
+    static std::string tunerLabel(enum rtlsdr_tuner t, const char *manufact, const char *product) {
+        if (t == RTLSDR_TUNER_R820T && std::strcmp(manufact, "RTLSDRBlog") == 0 &&
+            std::strcmp(product, "Blog V4L") == 0)
+            return "Rafael Micro R828S (RTL-SDR Blog V4 Lite)";
+        return tunerName(t);
     }
 
     rtlsdr_dev_t *dev_;
