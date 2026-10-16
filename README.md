@@ -4,9 +4,9 @@
 
 An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with a USB-OTG adapter and listen to **HD Radio™ (NRSC-5)** and ordinary **analog FM**, with a smooth blend between the two, like a car radio.
 
-No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art. The app has no internet permission at all.
+No root, no computer, no internet connection needed. Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
-> **Status: 1.0 beta.** A closed test on Google Play is running, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.0.** A closed test on Google Play is running, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
@@ -57,7 +57,7 @@ No root, no computer, no `rtl_tcp`, no internet. Everything you hear and see com
 
 ### Private by design
 
-No internet permission, no ads, no account, no tracking. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
+Nothing is collected: no ads, no account, no tracking. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
 
 ## What you need
 

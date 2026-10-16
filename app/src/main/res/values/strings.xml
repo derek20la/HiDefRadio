@@ -131,8 +131,8 @@
     <string name="about_stations_summary">%1$s (US, Canada, Mexico). Built in - names stations without going online.</string>
     <!-- 14c: the privacy policy (Settings > About). The full text is the web page at privacy_url. -->
     <string name="about_privacy">Privacy policy</string>
-    <string name="about_privacy_summary">Collects nothing. The app has no internet access. Tap to read.</string>
-    <string name="about_privacy_text">HiDef Radio does not collect, send or share any personal data. It has no internet permission, so it could not.\n\nYour favorites, station names, settings, station logos and remembered tuner gains are kept on this phone only. Settings > Clear saved data, clearing the app\'s storage or uninstalling removes them. If Android\'s own backup is switched on, Android may include them in the backup in your Google account.\n\nNo account, no ads, no tracking.\n\nThe full policy: %1$s</string>
+    <string name="about_privacy_summary">Collects nothing. Tap to read.</string>
+    <string name="about_privacy_text">HiDef Radio does not collect, send or share any personal data.\n\nYour favorites, station names, settings, station logos and remembered tuner gains are kept on this phone only. Settings > Clear saved data, clearing the app\'s storage or uninstalling removes them. If Android\'s own backup is switched on, Android may include them in the backup in your Google account.\n\nNo account, no ads, no tracking.\n\nThe full policy: %1$s</string>
     <string name="about_privacy_open">Open the web page</string>
     <string name="privacy_url" translatable="false">https://github.com/derek20la/hidefradio-privacy</string>
     <string name="privacy_url_short" translatable="false">github.com/derek20la/hidefradio-privacy</string>
