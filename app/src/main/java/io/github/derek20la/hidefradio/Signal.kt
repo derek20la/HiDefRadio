@@ -15,7 +15,7 @@ data class Signal(
     val locked: Boolean,      // the real sync state right now
     val everSynced: Boolean,  // synced at least once since tuning
     val mode: String,         // service mode, e.g. "MP1", "MP3" ("" = not known yet)
-    val am: Boolean,          // 9c: an AM station (HD only: no MER, no analog, no blend)
+    val am: Boolean,          // 9c: an AM station (no MER; build 18/19: analog AM + blend, no RDS)
     val direct: Boolean,      // 14c: direct sampling (a V3-type dongle on AM): the tuner is bypassed, no tuner gain
     val offsetHz: Int,        // tuning error nrsc5 measured
     val merLower: Float,      // modulation error ratio (dB) of each sideband, higher = better
@@ -47,7 +47,7 @@ data class Signal(
     // "mono" (always), "stereo" (never blended). fmPilot = the station sends a 19 kHz pilot;
     // fmPilotPct = its level in % of 75 kHz (stations send 8-10); fmStereoPct = how much
     // stereo is playing right now (100 = full, 0 = mono).
-    val fmStereoMode: String,
+    val fmStereoMode: String, // (build 19: the one stereo setting - it serves C-QUAM AM stereo too)
     val fmPilot: Boolean,
     val fmPilotPct: Float,
     val fmStereoPct: Int,
@@ -119,6 +119,16 @@ data class Signal(
     // analog on 91.1, 2026-10-09.
     val hdOwnPi: String,      // the HD station's OWN RDS code, 4 hex digits ("" = not known) - saved logos are filed under it
     val hdContest: Int,       // is another station's analog on this frequency right now? HD_CONTEST_NONE / SUSPECTED / CONFIRMED
+    // Build 18 / 19 (1.1): analog AM (amdemod.hpp). All "nothing" (0 / -99) on FM or while the
+    // demodulator is off (Digital only).
+    val amLocked: Boolean,    // a carrier is there and the PLL holds it
+    val amCarrierDb: Float,   // the carrier's level, dB re full scale (-99 = not measured)
+    val amSnrDb: Float,       // carrier-to-noise in 5 kHz, dB - the AM S-meter (-99 = not yet)
+    val amOffsetHz: Float,    // the carrier's distance from the tuned frequency
+    val amPilot: Boolean,     // a C-QUAM stereo pilot (25 Hz) is there
+    val amPilotPct: Float,    // its level, % of 100 % modulation (nominal 4)
+    val amStereoPct: Int,     // C-QUAM stereo playing right now (100 = full, 0 = mono)
+    val amBandwidth: Int,     // the audio low-pass, Hz (the setting; 5000 by default)
     // 12a step 3: the HD decoder runs (off in Analog only - nrsc5 gets no samples then)
     val hdOn: Boolean,
     // Build 9: the HD search on a station without HD (hdsearch.hpp, Auto only). After 30 s
@@ -296,6 +306,14 @@ data class Signal(
                 hdOtherName = str("hdOtherName").trim(),
                 hdOwnPi = str("hdOwnPi").trim(),                       // build 10
                 hdContest = long("hdContest", 0).toInt(),
+                amLocked = bool("amLocked"),                           // build 19
+                amCarrierDb = float("amCarrierDb", -99f),
+                amSnrDb = float("amSnrDb", -99f),
+                amOffsetHz = float("amOffsetHz", 0f),
+                amPilot = bool("amPilot"),
+                amPilotPct = float("amPilotPct", 0f),
+                amStereoPct = long("amStereoPct", 0).toInt(),
+                amBandwidth = long("amBandwidth", 5000).toInt(),
                 hdOn = bool("hdOn"),                                   // 12a step 3
                 hdSearch = str("hdSearch").ifEmpty { "on" },           // build 9
                 hdLookIn = long("hdLookIn", 0).toInt(),

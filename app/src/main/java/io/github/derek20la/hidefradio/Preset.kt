@@ -12,6 +12,8 @@ package io.github.derek20la.hidefradio
  *   analog  = M12 step 2: saved from an analog-only FM station (no HD - the name came
  *             from RDS); the tile then says "99.5 FM" instead of "99.5 HD1". Cleared
  *             as soon as HD shows up on that frequency (Presets.refresh).
+ *             Build 19: also an analog-only AM station ("1260 AM"; AM sends no RDS, so it
+ *             has no name until you give it one - long-press > Rename).
  *
  * This file is plain Kotlin (no Android), so it can be tested on a computer.
  * Presets.kt does the saving/loading on the phone.
@@ -28,19 +30,23 @@ data class Preset(
     val hdName: String
         get() = "HD${program + 1}"
 
-    /** "101.1 HD2" (FM, in MHz), "1260 HD1" (AM, kHz), or "99.5 FM" (M12: no HD). */
+    /** "101.1 HD2" (FM, in MHz), "1260 HD1" (AM, kHz), or "99.5 FM" / "1260 AM" (M12, build 19: no HD). */
     val freqText: String
         get() {
             val freq = if (freqHz >= 30_000_000)
                 FmBand.mhzText(freqHz)          // 9i: "87.75" when needed
             else
                 "${freqHz / 1000}"
-            return if (analog) "$freq FM" else "$freq $hdName"
+            return if (analog) "$freq $band" else "$freq $hdName"
         }
+
+    /** Build 19: "FM", or "AM" for an analog-only AM preset (saved from the analog AM demodulator). */
+    private val band: String
+        get() = if (freqHz >= 30_000_000) "FM" else "AM"
 
     /** M12 step 2: the big letters on a tile without a logo: the call sign, else "HD2" / "FM". */
     val initials: String
-        get() = station.ifEmpty { if (analog) "FM" else hdName }
+        get() = station.ifEmpty { if (analog) band else hdName }
 
     /**
      * The name on the tile:

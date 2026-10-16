@@ -26,8 +26,12 @@ object Settings {
     const val KEY_THEME = "theme"        // 9h: THEME_SYSTEM / THEME_LIGHT / THEME_DARK / THEME_BLACK
     const val KEY_MEDIA_BUTTONS = "media_buttons"   // 9j: BUTTONS_ALL / BUTTONS_PLAY_PAUSE / BUTTONS_NONE
     const val KEY_FM_STEREO = "fm_stereo"   // 11b step 2: STEREO_AUTO / STEREO_MONO / STEREO_FULL
+                                            // (build 19: serves FM stereo AND C-QUAM AM stereo; the key keeps its old name
+                                            // so a choice made before 1.1 is kept)
+    const val KEY_AM_BANDWIDTH = "am_bandwidth"   // build 19: analog AM audio bandwidth in Hz as text ("5000")
 
-    // 11b step 2: analog FM stereo. The numbers are what RadioEngine.setStereoModeNative() takes.
+    // 11b step 2: analog FM stereo (build 19: and C-QUAM AM stereo - one setting for both).
+    // The numbers are what RadioEngine.setStereoModeNative() takes.
     const val STEREO_AUTO = "auto"       // stereo, blended to mono as the signal gets noisy (default, like a car radio)
     const val STEREO_MONO = "mono"       // always mono - no hiss from weak (DX) stations
     const val STEREO_FULL = "stereo"     // stereo whenever the station sends it, hiss and all
@@ -118,11 +122,22 @@ object Settings {
         }
 
     /**
-     * 9c: the audio source for this frequency: AM is always HD only (there is no
-     * analog AM demodulator - Derek, 9h: blending stays FM-only), FM follows the setting.
+     * The audio source for this frequency. 9c: AM was always HD only (there was no analog AM
+     * demodulator). Build 19 (1.1): the engine has one now (amdemod.hpp, build 18), with its
+     * own blend - so AM follows the setting like FM. Kept as a function of the frequency so the
+     * two places that ask (RadioService) don't change if a band ever needs its own rule again.
      */
-    fun audioSourceFor(context: Context, freqHz: Int): Int =
-        if (FmBand.isAm(freqHz)) SOURCE_HD else audioSource(context)
+    @Suppress("UNUSED_PARAMETER")
+    fun audioSourceFor(context: Context, freqHz: Int): Int = audioSource(context)
+
+    /**
+     * Build 19: the analog AM audio bandwidth in Hz, for RadioEngine.setAmBandwidthNative().
+     * 5,000 (the default) = what a hybrid HD station's analog carries and what most AM radios
+     * pass; wider sounds fuller on a strong non-HD station, at the price of more of the
+     * neighbours' whistles. Must match res/values/strings.xml am_bandwidth_keys.
+     */
+    fun amBandwidthHz(context: Context): Int =
+        prefs(context).getString(KEY_AM_BANDWIDTH, "5000")?.toIntOrNull() ?: 5000
 
     /** 11d: play an HD signal that doesn't match the analog? (for RadioEngine.setBlendUnmatchedNative) */
     fun unmatchedPlaysHd(context: Context): Boolean =

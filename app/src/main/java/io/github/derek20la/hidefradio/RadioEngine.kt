@@ -152,6 +152,12 @@ object RadioEngine {
     external fun setDeemphasisNative(us: Int)
 
     /**
+     * Build 19 (the native side is build 18): the analog AM audio bandwidth, 2,000 .. 10,000 Hz
+     * (default 5,000), from Settings -> AM audio bandwidth. Works live. Any thread.
+     */
+    external fun setAmBandwidthNative(hz: Int)
+
+    /**
      * 13b: the call letters licensed on the frequency about to be tuned, from the
      * built-in FCC list (Stations.callsOn): "KHYL KWYE KRTH", separated by spaces.
      * [known] = false: there is no list for this frequency (AM, another region,

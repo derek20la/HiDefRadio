@@ -45,7 +45,9 @@
             app:useSimpleSummaryProvider="true" />
 
         <!-- 11b step 2: analog FM stereo. Auto = the car-radio blend to mono
-             on noisy signals; Always mono cuts the hiss of weak DX stations. -->
+             on noisy signals; Always mono cuts the hiss of weak DX stations.
+             Build 19: the same setting serves C-QUAM AM stereo (title "Stereo"; the key
+             stays "fm_stereo" so an earlier choice is kept). -->
         <ListPreference
             app:defaultValue="auto"
             app:entries="@array/fm_stereo_names"
@@ -57,6 +59,19 @@
         <Preference
             app:selectable="false"
             app:summary="@string/setting_fm_stereo_help" />
+
+        <!-- Build 19: the analog AM audio low-pass (RadioEngine.setAmBandwidthNative). -->
+        <ListPreference
+            app:defaultValue="5000"
+            app:entries="@array/am_bandwidth_names"
+            app:entryValues="@array/am_bandwidth_keys"
+            app:key="am_bandwidth"
+            app:title="@string/setting_am_bandwidth"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_am_bandwidth_help" />
 
         <ListPreference
             app:defaultValue="americas"

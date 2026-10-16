@@ -288,10 +288,11 @@ class RadioService : Service() {
         val gain = Settings.gainTenths(this)
         val hint = if (gain < 0) GainMemory.get(this, hz) else -1
         sourceOverride = -1                     // M12 step 2: a new station = the setting again
-        RadioEngine.setAudioSourceNative(Settings.audioSourceFor(this, hz))   // M11: digital, analog or auto (11d); 9c: AM = HD
+        RadioEngine.setAudioSourceNative(Settings.audioSourceFor(this, hz))   // M11: digital, analog or auto (11d); build 19: AM too
         RadioEngine.setBlendUnmatchedNative(Settings.unmatchedPlaysHd(this))   // 11d
         RadioEngine.setStereoModeNative(Settings.stereoMode(this))             // 11b step 2
         RadioEngine.setDeemphasisNative(Settings.deemphasisUs(this))           // 11b step 2: 75 / 50 us by region
+        RadioEngine.setAmBandwidthNative(Settings.amBandwidthHz(this))         // build 19: analog AM
         // 13b: who is licensed on this frequency (the built-in FCC list) - FM in the
         // Americas region only; elsewhere the native code works without the list.
         val calls = if (!FmBand.isAm(hz) && Settings.band(this) == FmBand.AMERICAS) Stations.callsOn(this, hz) else null
@@ -396,7 +397,7 @@ class RadioService : Service() {
             // M11: digital <-> analog <-> auto, live (the native side fades the new source in).
             Settings.KEY_HD_MODE -> if (connection != null) {
                 sourceOverride = -1                                      // M12 step 2: the setting wins again
-                val source = Settings.audioSourceFor(this, freqHz)       // 9c: AM stays HD only
+                val source = Settings.audioSourceFor(this, freqHz)       // build 19: AM follows the setting too
                 engine.execute { RadioEngine.setAudioSourceNative(source) }
             }
             Settings.KEY_HD_MISMATCH -> if (connection != null) {         // 11d
@@ -407,6 +408,10 @@ class RadioService : Service() {
             Settings.KEY_FM_STEREO -> if (connection != null) {
                 val mode = Settings.stereoMode(this)
                 engine.execute { RadioEngine.setStereoModeNative(mode) }
+            }
+            Settings.KEY_AM_BANDWIDTH -> if (connection != null) {     // build 19: live, like the stereo setting
+                val hz = Settings.amBandwidthHz(this)
+                engine.execute { RadioEngine.setAmBandwidthNative(hz) }
             }
             Settings.KEY_BAND -> if (connection != null) {
                 val us = Settings.deemphasisUs(this)
@@ -1118,7 +1123,8 @@ class RadioService : Service() {
         // here is another station's -> what the station says over RDS:
         //   Vogue                          no tagged song:  KKLA 99.5 FM
         //   Madonna · KRTH 101.1 FM                         99.5 Find Hope Here! KKLA
-        val noHd = callSign.isEmpty() && programs().isEmpty() && !FmBand.isAm(freqHz)
+        // Build 19: AM too (analog AM: no RDS, so the frequency is the name - "1260 AM").
+        val noHd = callSign.isEmpty() && programs().isEmpty()
         if (noHd || (s.otherHd && s.analog)) {
             val rdsName = s.rdsName.ifEmpty { s.hdSameCall }
             val station = listOf(rdsName, FmBand.bandText(freqHz)).filter { it.isNotBlank() }.joinToString(" ")

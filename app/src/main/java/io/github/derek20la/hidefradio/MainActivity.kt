@@ -798,9 +798,8 @@ class MainActivity : AppCompatActivity() {
             // M11: analog - the dot shows the FM carrier; the HD state follows in brackets.
             // (11d: also Auto while it plays the analog.)
             s.analog -> analogLine(s)
-            !s.everSynced -> R.color.signal_off to
-                getString(if (s.am) R.string.signal_searching_am else R.string.signal_searching,
-                          String.format(Locale.US, "%.1f s", s.tunedMs / 1000.0))
+            !s.everSynced -> R.color.signal_off to                      // (build 19: no AM-only text - AM has analog now)
+                getString(R.string.signal_searching, String.format(Locale.US, "%.1f s", s.tunedMs / 1000.0))
             !s.synced -> R.color.signal_lost to getString(R.string.signal_lost)
             // M10c step 3: weak -> amber (like "holding") and the word "weak".
             // 9c: AM sends no MER - BER only.
@@ -852,17 +851,9 @@ class MainActivity : AppCompatActivity() {
      * as a 5-bar S-meter (Derek's choice). The HD state is still shown, in brackets.
      */
     private fun analogLine(s: Signal): Pair<Int, String> {
+        if (s.am) return analogAmLine(s)                            // build 19
         val measuring = s.fmQuietDb <= -98f
-        val hd = when {
-            !s.hdOn -> getString(R.string.signal_hd_off)            // 12a step 3: Analog only
-            // Build 9: after 30 s without HD the search rests (a look every 30 s) - the
-            // "yet" goes, so you can see the app has stopped expecting HD here.
-            !s.everSynced -> if (s.hdResting) "no HD" else "no HD yet"
-            !s.synced -> "HD lost"
-            // 11d: the HD1 never lines up with the analog = another station's HD (rare).
-            s.blendMismatch -> getString(R.string.signal_hd_mismatch)
-            else -> String.format(Locale.US, "HD %s MER %.1f / %.1f", s.mode, s.merLower, s.merUpper)
-        }
+        val hd = hdInBrackets(s)
         val quiet = -s.fmQuietDb                                    // 9k: positive, higher = cleaner
         val bars = QUIET_BARS_DB.count { quiet >= it }              // 0..5
         val meter = "▮".repeat(bars) + "▯".repeat(QUIET_BARS_DB.size - bars)
@@ -887,6 +878,60 @@ class MainActivity : AppCompatActivity() {
             else -> R.color.signal_good
         }
         return color to "${getString(R.string.signal_analog)}  $level  ($hd)"
+    }
+
+    /**
+     * The HD state in brackets after the analog signal line: "HD off", "no HD yet", "HD lost",
+     * "HD ≠ analog", or the HD's own figures (FM: "HD MP1 MER 6.7 / 7.4"; AM sends no MER,
+     * so "HD MA1 BER 0.12%"). Build 19: shared by the FM and AM lines.
+     */
+    private fun hdInBrackets(s: Signal): String = when {
+        !s.hdOn -> getString(R.string.signal_hd_off)                // 12a step 3: Analog only
+        // Build 9: after 30 s without HD the search rests (a look every 30 s) - the
+        // "yet" goes, so you can see the app has stopped expecting HD here.
+        !s.everSynced -> if (s.hdResting) "no HD" else "no HD yet"
+        !s.synced -> "HD lost"
+        // 11d: the HD1 never lines up with the analog = another station's HD (rare).
+        s.blendMismatch -> getString(R.string.signal_hd_mismatch)
+        s.am -> String.format(Locale.US, "HD %s BER %s", s.mode, Signal.percent(s.ber))
+        else -> String.format(Locale.US, "HD %s MER %.1f / %.1f", s.mode, s.merLower, s.merUpper)
+    }
+
+    /**
+     * Build 19 (1.1): the signal line while the analog AM demodulator plays (amdemod.hpp):
+     *   "● Analog AM  ▮▮▮▮▯ ST  (no HD yet)"
+     * The bars are the carrier-to-noise ratio in 5 kHz (amSnrDb) - the AM counterpart of FM's
+     * quieting: how far the station's carrier stands above the noise beside it. Like FM, NOT
+     * the carrier level, which depends on the gain. "ST" = C-QUAM stereo is playing (at least
+     * half of it). Red "no carrier" when the demodulator holds no carrier (amLocked = 0) - a
+     * dead channel, or a station too weak to lock to.
+     * The thresholds ([AM_BARS_DB]) are a first guess, to be set against what Derek hears.
+     */
+    private fun analogAmLine(s: Signal): Pair<Int, String> {
+        val hd = hdInBrackets(s)
+        val label = getString(R.string.signal_analog_am)
+        // The first moment after tuning: the carrier search (an FFT) and the meter need a second or two.
+        if (!s.amLocked && s.tunedMs < AM_ACQUIRE_MS) return R.color.signal_off to "$label  …  ($hd)"
+        if (!s.amLocked) return R.color.signal_lost to "$label  ${getString(R.string.signal_no_carrier)}  ($hd)"
+        val measuring = s.amSnrDb <= -98f
+        val cn = s.amSnrDb
+        val bars = AM_BARS_DB.count { cn >= it }                    // 0..5
+        val meter = "▮".repeat(bars) + "▯".repeat(AM_BARS_DB.size - bars)
+        val st = if (s.amStereoPct >= 50) " ${getString(R.string.signal_stereo)}" else ""
+        val level = when {
+            measuring -> "…"
+            cn < AM_NOISE_DB -> "$meter ${getString(R.string.signal_noise)}"
+            cn < AM_WEAK_DB -> "$meter ${getString(R.string.signal_weak)}$st"
+            else -> "$meter$st"
+        }
+        val overload = s.peakDbfs > OVERLOAD_DBFS
+        val color = when {
+            measuring -> R.color.signal_off
+            cn < AM_NOISE_DB -> R.color.signal_lost
+            cn < AM_WEAK_DB || overload -> R.color.signal_holding
+            else -> R.color.signal_good
+        }
+        return color to "$label  $level  ($hd)"
     }
 
     /**
@@ -1045,8 +1090,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun analogRow(s: Signal): List<Pair<String, String>> {
         // 11d: in Digital only the demodulator is off (saves CPU) - say so.
-        if (s.am) return listOf("Analog" to "off (AM is HD only)")          // 9c
         if (!s.demodOn) return listOf("Analog" to "off (Digital only)")
+        if (s.am) return analogAmRow(s)                                     // build 19 (9c: was "off (AM is HD only)")
         // 9k: quieting first (what the S-meter bars show), then the carrier level.
         val quiet = if (s.fmQuietDb <= -98f) "quieting measuring…"
                     else String.format(Locale.US, "quieting %.1f dB", -s.fmQuietDb)
@@ -1070,6 +1115,45 @@ class MainActivity : AppCompatActivity() {
                                   when {
                                       !s.hdOn -> "off"                                // 12a step 3
                                       s.hdSearch == "rest" -> "resting"               // build 9
+                                      else -> "${s.hdLoadPct} %"
+                                  } + cpuLine(s))
+    }
+
+    /**
+     * Build 19 (1.1): the analog AM demodulator's numbers (amdemod.hpp, build 18):
+     *   "C/N 42.0 dB, carrier -21.0 dBFS, offset -12 Hz
+     *    C-QUAM stereo 100 %, pilot 4.1 %
+     *    demod 1 % CPU, HD decode 4 %"
+     * C/N = carrier-to-noise in 5 kHz, what the bars of the signal line show (it reads a
+     * little low on an HD station: the HD's own carriers sit in the band it is measured in).
+     * The offset is the carrier's distance from the tuned frequency - a station's own carrier
+     * is usually within a few Hz; more than that is the dongle's crystal.
+     */
+    private fun analogAmRow(s: Signal): List<Pair<String, String>> {
+        fun f(format: String, vararg args: Any) = String.format(Locale.US, format, *args)
+        val first = when {
+            !s.amLocked && s.tunedMs < AM_ACQUIRE_MS -> "looking for the carrier…"
+            !s.amLocked -> "no carrier" + if (s.amCarrierDb > -98f) f(" (level %.1f dBFS)", s.amCarrierDb) else ""
+            else -> (if (s.amSnrDb <= -98f) "C/N measuring…" else f("C/N %.1f dB", s.amSnrDb)) +
+                    (if (s.amCarrierDb > -98f) f(", carrier %.1f dBFS", s.amCarrierDb) else "") +
+                    f(", offset %.0f Hz", s.amOffsetHz)
+        }
+        // C-QUAM: what plays and why. The engine switches C-QUAM off while the HD is in sync
+        // (a hybrid HD station's own carriers sit where C-QUAM puts its stereo), so say that
+        // instead of "no pilot" then.
+        val stereo = when {
+            s.fmStereoMode == "mono" -> "mono (always mono)"
+            s.hdOn && s.synced -> "mono (C-QUAM is off while the HD is in sync)"
+            !s.amPilot -> "mono (no C-QUAM pilot)"
+            s.amStereoPct == 0 -> f("mono (blended - noisy), pilot %.1f %%", s.amPilotPct)
+            else -> f("C-QUAM stereo %d %%, pilot %.1f %%", s.amStereoPct, s.amPilotPct)
+        }
+        val bw = f(", audio %.0f kHz", s.amBandwidth / 1000f)
+        return listOf("Analog" to "$first\n$stereo$bw\n" +
+                                  "demod ${s.fmLoadPct} % CPU, HD decode " +
+                                  when {
+                                      !s.hdOn -> "off"
+                                      s.hdSearch == "rest" -> "resting"
                                       else -> "${s.hdLoadPct} %"
                                   } + cpuLine(s))
     }
@@ -1149,8 +1233,7 @@ class MainActivity : AppCompatActivity() {
     private fun alignRow(s: Signal): List<Pair<String, String>> {
         fun f(format: String, vararg args: Any) = String.format(Locale.US, format, *args)
         val text = when {
-            s.am -> "off (AM is HD only)"                          // 9c
-            !s.demodOn -> "off (Digital only)"                     // 11d
+            !s.demodOn -> "off (Digital only)"                     // 11d (build 19: AM aligns too)
             s.alignState == "waiting" -> "waiting for HD audio"
             s.alignState == "nomatch" -> f("no match (r %.2f, %d tries)", s.alignCorr, s.alignTries)
             s.alignCount == 0 -> "measuring…"
@@ -1196,6 +1279,8 @@ class MainActivity : AppCompatActivity() {
         // ("corrected" only in Auto: that is where the analog and the HD have to line up.)
         val corrected = if (s.auto) " - corrected" else ""
         val clock = when {
+            // Build 18/19: no clock correction on AM (a station's own carrier error swamps the
+            // dongle's) - the engine says "off" there; no line.
             s.am || !s.demodOn -> ""
             s.clockState == "measured" -> f("\ndongle clock %+.1f ppm (measured)%s", s.clockPpm, corrected)
             s.clockState == "guess" -> f("\ndongle clock about %+.0f ppm (from the tuning offset)%s", s.clockPpm, corrected)
@@ -1608,8 +1693,9 @@ class MainActivity : AppCompatActivity() {
             val label = current?.let { ProgramNames.label(this, freqHz, it, station) }.orEmpty()
             // M12 step 2: no HD here (no programs, no HD name) -> an analog FM preset named
             // by RDS: "KKLA / 99.5 FM". (If HD turns up later, Presets.refresh makes it HD.)
+            // Build 19: on AM too - "1260 AM", no name (AM sends no RDS).
             val s = shownSignal
-            val analog = service != null && !FmBand.isAm(freqHz) &&
+            val analog = service != null &&
                          ((service.programs().isEmpty() && s.station.isEmpty()) || (s.otherHd && s.analog))
             val preset = if (analog) Preset(freqHz, 0, station = s.rdsName.ifEmpty { s.hdSameCall }, analog = true)
                          else Preset(freqHz, program, station = station, label = label)
@@ -1923,6 +2009,13 @@ class MainActivity : AppCompatActivity() {
         private const val QUIET_NOISE_DB = 15f
         private const val QUIET_WEAK_DB = 25f
         private val QUIET_BARS_DB = floatArrayOf(15f, 20f, 28f, 36f, 44f)
+        // Build 19: the analog AM signal line - carrier-to-noise in 5 kHz (amSnrDb), dB. A first
+        // guess, the same steps as FM's quieting; to be set against what Derek hears (the engine
+        // blends C-QUAM to mono between 45 and 30 dB, so 44+ = 5 bars = clean enough for stereo).
+        private const val AM_NOISE_DB = 15f
+        private const val AM_WEAK_DB = 25f
+        private val AM_BARS_DB = floatArrayOf(15f, 20f, 28f, 36f, 44f)
+        private const val AM_ACQUIRE_MS = 2_500L     // the carrier search's first FFT + the PLL settling
         // M10c step 3: "weak" = CRC errors within the last 5 s, or synced 5 s without audio.
         private const val WEAK_HOLD_MS = 5_000L
         private const val WEAK_NO_AUDIO_MS = 5_000L

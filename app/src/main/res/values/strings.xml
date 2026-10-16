@@ -29,10 +29,11 @@
     <string name="speed_test_no_radio">Start the radio first</string>
     <string name="signal_off">Radio off</string>
     <string name="signal_searching">Searching for HD… %1$s</string>
-    <string name="signal_searching_am">AM is HD only - searching for the digital signal… %1$s</string>   <!-- 9c -->
     <string name="signal_lost">HD signal lost</string>
     <string name="signal_weak">weak</string>   <!-- M10c step 3: synced, but the audio breaks up -->
     <string name="signal_analog">Analog FM</string>   <!-- M11: playing our FM demodulator -->
+    <string name="signal_analog_am">Analog AM</string>   <!-- build 19: playing our AM demodulator (amdemod.hpp) -->
+    <string name="signal_no_carrier">no carrier</string>   <!-- build 19: the AM demodulator holds no carrier (dead channel, or too weak) -->
     <string name="signal_noise">noise</string>   <!-- 9k: FM quieting says only noise here (was "no station" by carrier level) -->
     <string name="signal_stereo">ST</string>   <!-- 11b: the tuner display's stereo indicator (at least half the stereo is playing) -->
     <string name="signal_blending_hd">blending → HD</string>       <!-- 11d: the crossfade runs -->
@@ -94,9 +95,11 @@
     <string name="stop">Stop</string>
     <string name="setting_pause_stop">Stop the radio after pausing for</string>
     <string name="setting_hd_mode">HD Radio</string>   <!-- M11 -->
-    <string name="setting_hd_mode_help">Auto plays the analog FM at once and blends to the HD audio when it is good, like a car radio - and back before a dropout. Digital only is HD only (silence without HD). Analog only switches the HD decoder off (saves battery). AM stations are always HD only.</string>   <!-- 11d; 12a step 3 -->
-    <string name="setting_fm_stereo">FM stereo</string>   <!-- 11b step 2 -->
-    <string name="setting_fm_stereo_help">Auto blends to mono as the signal gets noisy, like a car radio (ST on the signal line = stereo). Always mono cuts the hiss of weak DX stations.</string>
+    <string name="setting_hd_mode_help">Auto plays the analog at once and blends to the HD audio when it is good, like a car radio - and back before a dropout. On AM the sound runs about 3 seconds behind live in Auto, so the blend has time to line up. Digital only is HD only (silence without HD). Analog only switches the HD decoder off (saves battery).</string>   <!-- 11d; 12a step 3; build 19: AM has analog + blend now -->
+    <string name="setting_fm_stereo">Stereo</string>   <!-- 11b step 2; build 19: "FM stereo" -> "Stereo" (it serves C-QUAM AM stereo too) -->
+    <string name="setting_fm_stereo_help">FM stereo and C-QUAM AM stereo. Auto blends to mono as the signal gets noisy, like a car radio (ST on the signal line = stereo). Always mono cuts the hiss of weak DX stations.</string>
+    <string name="setting_am_bandwidth">AM audio bandwidth</string>   <!-- build 19 -->
+    <string name="setting_am_bandwidth_help">How much of the AM audio is let through. 5 kHz suits most stations, and HD stations send no more on analog. Wider sounds fuller on a strong station without HD, but lets in more whistles from the stations next door.</string>
     <string name="setting_hd_mismatch">If the HD signal is another station\'s</string>   <!-- 11d: Auto only -->
 
     <!-- Milestone 9f: About (bottom of the settings screen) -->
@@ -112,7 +115,7 @@
     <string name="settings_about">About</string>
     <!-- Build 7: the welcome card - shown at the first start, and under Settings > About -->
     <string name="welcome_title">Welcome to HiDef Radio</string>
-    <string name="welcome_text">1. Plug an RTL-SDR dongle into the phone with a USB-OTG adapter, and connect an antenna.\n\n2. Tap the frequency display to type in a station, for example 101.1.\n\n3. The arrows step through the band. The star saves a favorite.\n\n4. The sound starts in analog FM. On a station with HD Radio it blends to HD automatically after about ten seconds.\n\nYou can read this again under Settings > About > Getting started.</string>
+    <string name="welcome_text">1. Plug an RTL-SDR dongle into the phone with a USB-OTG adapter, and connect an antenna.\n\n2. Tap the frequency display to type in an FM or AM station, for example 101.1 or 550.\n\n3. The arrows step through the band. The star saves a favorite.\n\n4. The sound starts in analog. On a station with HD Radio it blends to HD automatically, after about ten seconds on FM and about twenty on AM.\n\nYou can read this again under Settings > About > Getting started.</string>
     <string name="welcome_ok">Got it</string>
     <string name="about_welcome">Getting started</string>
     <string name="about_welcome_summary">How to use the radio, in four lines</string>
@@ -232,6 +235,20 @@
         <item>auto</item>
         <item>mono</item>
         <item>stereo</item>
+    </string-array>
+
+    <!-- Build 19: Settings -> AM audio bandwidth (Hz). Must match Settings.amBandwidthHz (default 5000). -->
+    <string-array name="am_bandwidth_names">
+        <item>3 kHz (narrow)</item>
+        <item>5 kHz</item>
+        <item>8 kHz</item>
+        <item>10 kHz (wide)</item>
+    </string-array>
+    <string-array name="am_bandwidth_keys" translatable="false">
+        <item>3000</item>
+        <item>5000</item>
+        <item>8000</item>
+        <item>10000</item>
     </string-array>
 
     <!-- 9h: Settings -> Display -> Theme -->

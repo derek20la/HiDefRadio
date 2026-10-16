@@ -22,7 +22,7 @@ No root, no computer, no internet connection needed. Everything you hear and see
 - **Analog FM in stereo**, with a stereo-to-mono blend as the signal gets noisy.
 - **RDS / RBDS** on analog FM: call letters, program type, RadioText, and song title and artist where the station sends them.
 - **HD Radio on AM**. It needs a dongle that can tune AM, such as the RTL-SDR Blog V4.
-- **Analog AM** (version 1.1, in the engine on `main` - the screens still say "AM is HD only" until the next build): a synchronous detector, which is what HD-ready AM radios use, with the same blend to HD as on FM, and **C-QUAM AM stereo** for the few dozen US stations that still send it. See [Known limits](#known-limits).
+- **Analog AM** (version 1.1, on `main`, not yet in a release): a synchronous detector, which is what HD-ready AM radios use, with the same blend to HD as on FM, and **C-QUAM AM stereo** for the few dozen US stations that still send it. See [Known limits](#known-limits).
 - Band plans for the Americas, Europe and most of the world, Japan and Brazil, each with the right FM de-emphasis (75 or 50 µs).
 
 ### The blend
@@ -186,14 +186,14 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 - After every tune you hear about ten seconds of analog before the HD takes over. Measuring the alignment takes that long.
 - In Auto, HD1 plays about 2.5 seconds behind Digital only. That delay is what makes the look-ahead possible.
-- Analog AM (1.1) has so far been proven on recordings of two stations (KMZT 1260, KBRT 740) in the desktop harness, not yet on the phone; the audio bandwidth is fixed at 5 kHz for now (the engine can do 2-10 kHz; a setting is to come). C-QUAM stereo is proven on a made-up signal only - no C-QUAM station is within reach of Los Angeles - so which channel is the left one has not been confirmed on the air. The clock correction does not run on AM (the envelope alignment is not fine enough to measure a crystal); with a non-TCXO dongle the blend re-aligns about every 40 s there.
+- Analog AM (1.1) has so far been proven on recordings of two stations (KMZT 1260, KBRT 740) in the desktop harness, not yet on the phone; the audio bandwidth is 5 kHz by default (Settings > AM audio bandwidth: 3, 5, 8 or 10 kHz). In Auto the sound on AM starts about 3 s after tuning, since the analog plays that far behind live there. The AM signal meter's bars (carrier-to-noise) still have first-guess thresholds. C-QUAM stereo is proven on a made-up signal only - no C-QUAM station is within reach of Los Angeles - so which channel is the left one has not been confirmed on the air. The clock correction does not run on AM (the envelope alignment is not fine enough to measure a crystal); with a non-TCXO dongle the blend re-aligns about every 40 s there.
 - AM HD has had little on-air testing: one station (KMZT 1260 kHz in Los Angeles) heard on the phone with an RTL-SDR Blog V4, plus off-air recordings run through the app's engine (`tools/harness`). AM with a V3 has not been tried yet.
 - 64-bit ARM phones only.
 - Most testing so far has been in the Los Angeles area. Testers have run it in other places and on other phones and dongles too, and more reports are what the closed test is for.
 
 ## Plans
 
-- **1.1**: analog AM with the blend and C-QUAM AM stereo (the engine is done; the screens, settings and welcome card follow), and an rtl_tcp network source.
+- **1.1**: analog AM with the blend and C-QUAM AM stereo (built; on-air testing next), and an rtl_tcp network source.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses
