@@ -112,7 +112,7 @@ Good to know:
 
 ```
 RTL-SDR dongle --USB--> libusb + librtlsdr (opened with Android's USB permission)
-                           |
+                           |  iqsource_usb.hpp: the one file that talks to the driver
                            |  raw IQ samples, 1,488,375 samples/s
                            |
               +------------+-------------+
@@ -156,7 +156,8 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 ### Where things are
 
-- `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the dongle, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
+- `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
+- `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. A network source (rtl_tcp) is planned to plug in beside it.
 - Next to it are eight self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter). `vec4.hpp` next to it is its four-floats-at-a-time layer: NEON on arm64, plain C++ anywhere else.
   - `rds.hpp`: the RDS / RBDS decoder. It needs nothing but the FM multiplex signal.

@@ -19,6 +19,11 @@ example of driving the engine outside Android.
 - `GAIN=auto` starts with the app's auto-gain search (default: a manual gain of 30 dB).
 - `DONGLE=V3` the fake dongle says it is an RTL-SDR Blog V3 (R820T tuner): on AM it reports
   direct sampling, and the app must then leave the tuner gain alone.
+  `DONGLE=FAIL`: the dongle can't be opened (the app's error path).
+- `RTLTRACE=calls.txt` the fake dongle writes every driver call the app makes, with its
+  arguments, to that file (see "The source split" below).
+- events `t:gain:N` (the manual gain setting, tenths of a dB) and `t:again:N` (the gain
+  watchdog moving the auto gain) besides `t:prog:N` and `t:src:N`.
 - `IQSTEP=1` "virtual time": the recording is played as fast as the PC can, and everything
   the app does on a timer (the alignment watcher, the audio player) is driven by the
   recording's own time. The same run gives the same numbers every time, and a minute takes
@@ -219,6 +224,29 @@ verdict (0 can't tell, 1 yes, 2 no) with the analog station's name, the contest 
 `blendtest` has the blend's side of it with made-up audio: the HD alone, silence in a
 dropout and never a frame of the other station, the safety net after 10 s, "stay on analog",
 and the way back to the ordinary aligned blend.
+
+## The source split (build 17): RTLTRACE
+
+Build 17 moved every librtlsdr call out of `native-lib.cpp` into `iqsource_usb.hpp`, behind
+the interface in `iqsource.hpp` - so that a second source (rtl_tcp) can be added without
+touching the radio. A move like that must change nothing the dongle sees and nothing you hear.
+The proof: run the old and the new engine on the same recording in virtual time and compare
+both the audio and the list of driver calls:
+
+    IQFILE=krth.cu8 IQSTEP=1 GAIN=auto WAVOUT=new.wav RTLTRACE=new.txt build/apptest 101100000 2 40
+    (the same with the build 16 engine -> old.wav, old.txt)
+    cmp old.wav new.wav && diff old.txt new.txt
+
+The last line of the trace ("read_async: N blocks delivered") counts how many blocks the fake
+dongle sent before the harness stopped it; that number moves by a block or two from run to
+run even with the same engine (the harness's own threads), so leave it out of the diff.
+
+Result on 2026-10-16, build 16 against build 17, 14 runs: audio bit for bit
+the same and the same driver calls in every one - KRTH Auto with auto-gain, KRTH with manual
+and watchdog gain changes, KRTH Digital only, KKGO HD1 -> HD2 -> HD1 -> HD4, KLLI, KYSR
+Analog only, KOST with its dropouts and four source switches, KKLA (no HD, the search rests),
+KKLQ, AM 1260 on a V4, AM 1260 on a V3 (direct sampling: no gain calls at all, also when the
+gain is asked for), KRTH on a V3, and a dongle that fails to open.
 
 ## "Comments only": objcheck.sh
 

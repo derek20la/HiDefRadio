@@ -16,7 +16,8 @@
 #include <sched.h>         // sched_getcpu (build 12: which core is this thread on?)
 #include <android/log.h>   // __android_log_print -> Logcat
 
-#include "rtl-sdr.h"       // librtlsdr (with our rtlsdr_open_fd patch)
+#include "iqsource.hpp"        // build 17: where the samples come from (the "source split")
+#include "iqsource_usb.hpp"    // build 17: ... the dongle on the USB port (the only file that calls librtlsdr)
 #include "fmdemod.hpp"     // M11: our analog FM demodulator
 #include "aligner.hpp"     // M11 (11c): measures the analog-vs-HD time offset and loudness
 #include "blend.hpp"       // M11 (11d): the analog <-> HD blend ("HD Radio: Auto")
@@ -35,15 +36,18 @@ extern "C" {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// The open dongle, or nullptr if none is open.
-// Only one dongle at a time for now.
-static rtlsdr_dev_t *g_dev = nullptr;
+// The open sample source, or nullptr if none is open. Only one at a time.
+// Build 17: until build 16 this was librtlsdr's own handle (rtlsdr_dev_t *) and the driver
+// was called from all over this file. Now every driver call goes through this one object -
+// see iqsource.hpp for why, and iqsource_usb.hpp for the dongle itself. Written only by
+// openDongleNative / closeDongleNative on the engine thread, with the stream stopped.
+static std::unique_ptr<iq::Source> g_src;
 
 // ---- Streaming state (Milestone 4) ----
 // HD Radio (nrsc5) needs exactly this sample rate.
 static const uint32_t SAMPLE_RATE = 1488375;
 
-static std::thread g_streamThread;               // runs rtlsdr_read_async()
+static std::thread g_streamThread;               // runs the source's stream() (USB: rtlsdr_read_async)
 static std::atomic<bool> g_streaming{false};     // true while samples are flowing
 static std::atomic<long long> g_bytes{0};        // total bytes received
 static std::atomic<float> g_level{0.0f};         // signal level of the latest block
@@ -728,19 +732,6 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
     if (blockMs > 0) g_fmLoad.add(usedMs, blockMs, g_fmLoadPct);   // 9i: 1 s average
 }
 
-// Turns librtlsdr's tuner number into a readable name.
-static const char *tunerName(enum rtlsdr_tuner t) {
-    switch (t) {
-        case RTLSDR_TUNER_E4000:  return "Elonics E4000";
-        case RTLSDR_TUNER_FC0012: return "Fitipower FC0012";
-        case RTLSDR_TUNER_FC0013: return "Fitipower FC0013";
-        case RTLSDR_TUNER_FC2580: return "FCI FC2580";
-        case RTLSDR_TUNER_R820T:  return "Rafael Micro R820T";
-        case RTLSDR_TUNER_R828D:  return "Rafael Micro R828D";
-        default:                  return "unknown";
-    }
-}
-
 extern "C" JNIEXPORT jstring JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_stringFromJNI(
         JNIEnv* env,
@@ -755,56 +746,30 @@ Java_io_github_derek20la_hidefradio_RadioEngine_stringFromJNI(
 
 // Kotlin (RadioEngine): external fun openDongleNative(fd: Int): String
 // Opens the dongle with the fd Android gave us and reports what it found.
+// Build 17: the work is iq::UsbSource::open (iqsource_usb.hpp) - the same librtlsdr calls,
+// the same text back (Kotlin shows it under "Show debug info").
 extern "C" JNIEXPORT jstring JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_openDongleNative(
         JNIEnv* env,
         jobject /* this */,
         jint fd) {
-    if (g_dev != nullptr) {
+    if (g_src != nullptr) {
         return env->NewStringUTF("librtlsdr: already open");
     }
-
-    LOGI("rtlsdr_open_fd(fd=%d)...", fd);
-    int r = rtlsdr_open_fd(&g_dev, fd);
-    if (r < 0) {
-        g_dev = nullptr;
-        LOGE("rtlsdr_open_fd failed: %d", r);
-        std::string msg = "librtlsdr: open FAILED (error " + std::to_string(r) + ")";
-        return env->NewStringUTF(msg.c_str());
-    }
-
-    // Ask the dongle about itself - proves we can really talk to it.
-    char manufact[256] = {0};
-    char product[256] = {0};
-    char serial[256] = {0};
-    rtlsdr_get_usb_strings(g_dev, manufact, product, serial);
-
-    enum rtlsdr_tuner tuner = rtlsdr_get_tuner_type(g_dev);
-    int gainCount = rtlsdr_get_tuner_gains(g_dev, nullptr);  // nullptr = just count them
-
-    LOGI("Opened! manufacturer='%s' product='%s' serial='%s'", manufact, product, serial);
-    LOGI("Tuner: %s, %d gain steps", tunerName(tuner), gainCount);
-
-    std::string msg = "librtlsdr: opened OK\n";
-    msg += std::string(manufact) + " " + product + " (serial " + serial + ")\n";
-    msg += "Tuner: " + std::string(tunerName(tuner)) + "\n";
-    msg += "Gain steps: " + std::to_string(gainCount);
-    return env->NewStringUTF(msg.c_str());
+    std::string report;
+    g_src = iq::UsbSource::open(fd, &report);   // nullptr if it failed; report says why
+    return env->NewStringUTF(report.c_str());
 }
 
 // Kotlin (RadioEngine): external fun closeDongleNative()
-// Shuts down librtlsdr + libusb. Must run BEFORE Kotlin closes the
-// UsbDeviceConnection (which closes the fd).
+// Shuts down the source (for the USB dongle: librtlsdr + libusb). Must run BEFORE Kotlin
+// closes the UsbDeviceConnection (which closes the fd).
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_closeDongleNative(
         JNIEnv* /* env */,
         jobject /* this */) {
     stopStreaming();   // safety: never close while the streaming thread is running
-    if (g_dev != nullptr) {
-        LOGI("rtlsdr_close()");
-        rtlsdr_close(g_dev);
-        g_dev = nullptr;
-    }
+    g_src.reset();     // deleting the source closes it (UsbSource: rtlsdr_close)
     g_direct = false;   // 14c: the next dongle starts with its tuner in use
 }
 
@@ -1110,12 +1075,12 @@ static const float HINT_MIN_DBFS = -10.0f;      //   ... quieter than this = sig
 // Sets [gain] and measures the peak (dBFS) of a short burst of samples.
 // Returns false if the dongle didn't answer.
 static bool measurePeak(std::vector<uint8_t> &buf, int gain, float *peakDb) {
-    if (rtlsdr_set_tuner_gain(g_dev, gain) != 0) {
+    if (g_src->setGain(gain) != 0) {
         LOGE("auto-gain: set_tuner_gain(%d) failed", gain);
         return false;   // (nrsc5 would retry forever here; we give up instead)
     }
     int n = 0;
-    if (rtlsdr_read_sync(g_dev, buf.data(), (int)buf.size(), &n) != 0 || n <= 0) {
+    if (!g_src->readBurst(buf.data(), (int)buf.size(), &n)) {
         LOGE("auto-gain: read_sync failed");
         return false;
     }
@@ -1132,13 +1097,11 @@ static bool measurePeak(std::vector<uint8_t> &buf, int gain, float *peakDb) {
 
 static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
     *usedHint = false;
-    int count = rtlsdr_get_tuner_gains(g_dev, nullptr);
-    if (count <= 0) return -1;
-    std::vector<int> gains(count);
-    count = rtlsdr_get_tuner_gains(g_dev, gains.data());
-    if (count <= 0) return -1;
+    std::vector<int> gains = g_src->gainSteps();        // the tuner's steps, low to high
+    if (gains.empty()) return -1;
+    int count = (int)gains.size();
 
-    rtlsdr_set_tuner_gain_mode(g_dev, 1);              // manual gain
+    g_src->setGainMode(true);                           // manual gain
     std::vector<uint8_t> buf(128 * 256);                 // same size nrsc5 uses (~11 ms)
     float db = 0.0f;
 
@@ -1178,7 +1141,7 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
         }
     }
 
-    rtlsdr_set_tuner_gain(g_dev, bestGain);
+    g_src->setGain(bestGain);
     LOGI("auto-gain: chose %.1f dB (peak %.1f dBFS)", bestGain / 10.0f, bestDb);
     *chosenPeakDbfs = bestDb;
     return bestGain;
@@ -1458,8 +1421,8 @@ static bool openHd() {
     return true;
 }
 
-// librtlsdr calls this every time a block of samples arrives
-// (about 6 times per second, 262,144 bytes each). It runs on the
+// The source calls this every time a block of samples arrives (build 17: iq::Source::stream;
+// for the USB dongle that is librtlsdr, about 6 times per second, 262,144 bytes each). It runs on the
 // streaming thread, so it must be quick.
 //
 // Each sample is 2 bytes: I and Q, each 0..255 with "zero" at 127.5.
@@ -1574,12 +1537,12 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
     if (len > 0) g_coreMeter.add(len / 2.0 / SAMPLE_RATE * 1000.0);
 }
 
-// Body of the streaming thread. rtlsdr_read_async() only returns when
-// streaming is cancelled (by us, or because the dongle was unplugged).
+// Body of the streaming thread. The source's stream() (USB: rtlsdr_read_async) only returns
+// when streaming is cancelled (by us, or because the dongle was unplugged).
 static void streamThreadMain() {
     LOGI("streaming thread started");
-    int r = rtlsdr_read_async(g_dev, onSamples, nullptr, 0, 0);  // 0,0 = default buffers
-    LOGI("rtlsdr_read_async returned %d", r);
+    int r = g_src->stream(onSamples, nullptr);   // calls onSamples() once per block
+    LOGI("%s stream returned %d", g_src->kind(), r);
     g_streaming = false;
 }
 
@@ -1595,26 +1558,26 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         jint freqHz,
         jint gainTenthsDb,
         jint hintTenthsDb) {
-    if (g_dev == nullptr) return env->NewStringUTF("Stream: dongle not open");
+    if (g_src == nullptr) return env->NewStringUTF("Stream: dongle not open");
     if (g_streaming)      return env->NewStringUTF("Stream: already running");
 
     // 9d: the stopwatch for "time to sync" / "time to audio" starts here,
     // so it includes auto-gain (the listener waits for that too).
     g_tuneTicks = (long long)Clock::now().time_since_epoch().count();
 
-    int r = rtlsdr_set_sample_rate(g_dev, SAMPLE_RATE);
+    int r = g_src->setSampleRate(SAMPLE_RATE);
     if (r < 0) {
-        LOGE("rtlsdr_set_sample_rate failed: %d", r);
+        LOGE("set_sample_rate failed: %d", r);
         return env->NewStringUTF("Stream: set_sample_rate FAILED");
     }
-    rtlsdr_set_center_freq(g_dev, (uint32_t)freqHz);
-    rtlsdr_reset_buffer(g_dev);             // throw away stale data
+    g_src->setFrequency((uint32_t)freqHz);
+    g_src->flush();                         // throw away stale data
 
     // 14c: did the driver just switch to direct sampling (see g_direct)? Ask it AFTER
     // tuning - it decides per frequency. Then every gain call is skipped: they would only
     // write to a tuner that is switched off (and leave the dongle's I2C line to the tuner
     // open while streaming, which only adds noise).
-    const bool direct = rtlsdr_get_direct_sampling(g_dev) > 0;
+    const bool direct = g_src->directSampling();
     if (direct != g_direct.load())
         LOGI("%s", direct ? "Direct sampling ON (tuner bypassed below 24 MHz) - no tuner gain"
                           : "Direct sampling off - the tuner is back in use");
@@ -1629,9 +1592,9 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         g_gainRemembered = false;
         g_gainSearchMs = -1;
     } else if (gainTenthsDb >= 0) {
-        rtlsdr_set_tuner_gain_mode(g_dev, 1);             // 1 = manual gain
-        rtlsdr_set_tuner_gain(g_dev, gainTenthsDb);       // picks the nearest supported step
-        int actual = rtlsdr_get_tuner_gain(g_dev);
+        g_src->setGainMode(true);                         // manual gain
+        g_src->setGain(gainTenthsDb);                     // picks the nearest supported step
+        int actual = g_src->gain();
         snprintf(gbuf, sizeof(gbuf), "gain %.1f dB (manual)", actual / 10.0f);
         gainText = gbuf;
         g_gainTenths = actual;                            // 9d
@@ -1644,7 +1607,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         Clock::time_point searchStart = Clock::now();     // M10c: time just the gain part
         int chosen = doAutoGain(&peak, hintTenthsDb, &usedHint);   // takes well under a second
         if (chosen < 0) {
-            rtlsdr_set_tuner_gain_mode(g_dev, 0);         // fall back to tuner AGC
+            g_src->setGainMode(false);                    // fall back to tuner AGC
             gainText = "gain auto FAILED - using tuner AGC";
         } else {
             snprintf(gbuf, sizeof(gbuf), "gain %.1f dB (auto%s, peak %.1f dBFS)",
@@ -1655,7 +1618,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         g_gainAuto = true;
         g_gainRemembered = usedHint;                      // M10c
         g_gainSearchMs = (int)msSince(searchStart);
-        rtlsdr_reset_buffer(g_dev);                       // discard auto-gain leftovers
+        g_src->flush();                                   // discard auto-gain leftovers
         LOGI("auto-gain took %d ms (%lld ms since tuning)", g_gainSearchMs.load(), msSinceTune());
     }
     g_peakMax = -99.0f;                                   // M10c: the watchdog starts fresh
@@ -1712,8 +1675,8 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_hdRest = hdsearch::SEARCHING; g_hdLookInS = 0;
     if (hdWanted() && !openHd()) return env->NewStringUTF("Stream: nrsc5_open_pipe FAILED");
 
-    uint32_t actualRate = rtlsdr_get_sample_rate(g_dev);
-    uint32_t actualFreq = rtlsdr_get_center_freq(g_dev);
+    uint32_t actualRate = g_src->sampleRate();
+    uint32_t actualFreq = g_src->frequency();
     LOGI("Streaming: rate=%u Hz, freq=%u Hz", actualRate, actualFreq);
 
     g_bytes = 0;
@@ -1729,11 +1692,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
 // Stops streaming and WAITS for the thread to finish.
 static void stopStreaming() {
     if (g_streamThread.joinable()) {
-        if (g_streaming && g_dev != nullptr) {
-            LOGI("rtlsdr_cancel_async()");
-            rtlsdr_cancel_async(g_dev);
+        if (g_streaming && g_src != nullptr) {
+            g_src->cancel();     // (UsbSource logs "rtlsdr_cancel_async()")
         }
-        g_streamThread.join();   // wait until rtlsdr_read_async() has returned
+        g_streamThread.join();   // wait until the source's stream() has returned
         LOGI("streaming thread stopped");
     }
     g_streaming = false;
@@ -1760,7 +1722,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_stopStreamNative(
 // Kotlin polls these once per second (the "pull" model - C never calls Kotlin).
 extern "C" JNIEXPORT jboolean JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_isDongleOpenNative(JNIEnv*, jobject) {
-    return g_dev != nullptr ? JNI_TRUE : JNI_FALSE;
+    return g_src != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -2174,11 +2136,11 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
 extern "C" JNIEXPORT jint JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setGainNative(
         JNIEnv* /* env */, jobject /* this */, jint gainTenthsDb) {
-    if (g_dev == nullptr || gainTenthsDb < 0) return -1;
+    if (g_src == nullptr || gainTenthsDb < 0) return -1;
     if (g_direct) return -1;                            // 14c: direct sampling - the tuner is off
-    rtlsdr_set_tuner_gain_mode(g_dev, 1);               // 1 = manual gain
-    rtlsdr_set_tuner_gain(g_dev, gainTenthsDb);
-    int actual = rtlsdr_get_tuner_gain(g_dev);
+    g_src->setGainMode(true);                           // manual gain
+    g_src->setGain(gainTenthsDb);
+    int actual = g_src->gain();
     g_gainTenths = actual;                              // shown in the signal details
     g_gainAuto = false;
     LOGI("Manual gain: asked %.1f dB, now %.1f dB", gainTenthsDb / 10.0f, actual / 10.0f);
@@ -2203,14 +2165,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_takePeakMaxNative(JNIEnv*, jobje
 extern "C" JNIEXPORT jintArray JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_getGainStepsNative(JNIEnv* env, jobject) {
     std::vector<int> gains;
-    if (g_dev != nullptr) {
-        int count = rtlsdr_get_tuner_gains(g_dev, nullptr);
-        if (count > 0) {
-            gains.resize(count);
-            count = rtlsdr_get_tuner_gains(g_dev, gains.data());
-            gains.resize(count > 0 ? count : 0);
-        }
-    }
+    if (g_src != nullptr) gains = g_src->gainSteps();
     jintArray out = env->NewIntArray((jsize)gains.size());
     if (out != nullptr && !gains.empty()) {
         std::vector<jint> values(gains.begin(), gains.end());
@@ -2226,11 +2181,11 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getGainStepsNative(JNIEnv* env, 
 extern "C" JNIEXPORT jint JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setAutoGainNative(
         JNIEnv* /* env */, jobject /* this */, jint gainTenthsDb) {
-    if (g_dev == nullptr || !g_streaming || gainTenthsDb < 0) return -1;
+    if (g_src == nullptr || !g_streaming || gainTenthsDb < 0) return -1;
     if (g_direct) return -1;                            // 14c: direct sampling - the tuner is off
     int before = g_gainTenths.load();
-    rtlsdr_set_tuner_gain(g_dev, gainTenthsDb);         // still in manual mode since doAutoGain
-    int actual = rtlsdr_get_tuner_gain(g_dev);
+    g_src->setGain(gainTenthsDb);                       // still in manual mode since doAutoGain
+    int actual = g_src->gain();
     g_gainTenths = actual;
     g_gainAuto = true;
     g_peakMax = -99.0f;                                 // measure the new gain from scratch

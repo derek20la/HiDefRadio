@@ -15,6 +15,8 @@
 //                  the run and print its result at the end. It needs 10 more seconds of the
 //                  recording; the "whole harness" figure of the COST line then includes it.
 //   events: "t:prog:N" = select program N (0 = HD1) at t seconds;  "t:src:N" = change the audio source
+//           "t:gain:N" = the manual gain setting -> N tenths of a dB (setGainNative);
+//           "t:again:N" = the gain watchdog moves the auto gain to N (setAutoGainNative)   (build 17)
 // Prints one line per 0.25 s with the keys of interest from getSignalNative(), and at the end
 // what the run cost: the two loads the app shows in its signal details (demod, HD decode),
 // averaged over the run, and the processor time of the whole harness per second of radio.
@@ -54,6 +56,10 @@ int main(int argc, char **argv) {
     std::vector<Ev> evs;
     for (int a = 4; a < argc; a++) { std::stringstream ss(argv[a]); std::string t, w, n; getline(ss, t, ':'); getline(ss, w, ':'); getline(ss, n, ':'); evs.push_back({ atof(t.c_str()), w, atoi(n.c_str()), false }); }
     fprintf(stderr, "%s\n", str(J(openDongleNative)(&env, nullptr, 3)).c_str());
+    {   // build 17: the gain steps as Kotlin's GainKeeper gets them (getGainStepsNative)
+        FakeArray *g = (FakeArray *)J(getGainStepsNative)(&env, nullptr);
+        printf("gain steps: %zu (%d ... %d)\n", g->i.size(), g->i.empty() ? -1 : g->i.front(), g->i.empty() ? -1 : g->i.back());
+    }
     J(setAudioSourceNative)(&env, nullptr, src);
     J(setBlendUnmatchedNative)(&env, nullptr, getenv("UNMATCHED") && strcmp(getenv("UNMATCHED"), "hd") == 0 ? JNI_TRUE : JNI_FALSE);
     // HDREST=off: the HD search never rests (hdsearch.hpp) - the engine as it was before build 9.
@@ -101,7 +107,10 @@ int main(int argc, char **argv) {
     static auto tick = [](double t) {
         for (Ev &e : *events) if (!e.done && t >= e.t) {
             e.done = true;
-            if (e.what == "prog") J(setProgramNative)(E, nullptr, e.n); else J(setAudioSourceNative)(E, nullptr, e.n);
+            if (e.what == "prog") J(setProgramNative)(E, nullptr, e.n);
+            else if (e.what == "gain") printf("        manual gain -> %d\n", J(setGainNative)(E, nullptr, e.n));      // build 17
+            else if (e.what == "again") printf("        watchdog gain -> %d\n", J(setAutoGainNative)(E, nullptr, e.n));
+            else J(setAudioSourceNative)(E, nullptr, e.n);
             printf("%7.2f  >>> %s %d\n", t, e.what.c_str(), e.n);
         }
         if (t >= nextAlign) { nextAlign += 2.0; J(measureAlignmentNative)(E, nullptr); }   // Kotlin's alignWatcher
