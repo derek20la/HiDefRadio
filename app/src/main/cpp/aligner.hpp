@@ -93,6 +93,33 @@ static const int    KEEP_RESULTS = 9;                  // median over the last a
 static const int    AGREE_FRAMES = 3;                  // two results this close = "ok" (3 frames = 0.07 ms)
 static const int    JUMP_FRAMES  = 200;                // a result this far from the median = the alignment changed
 static const int    NO_MATCH_AFTER = 3;                // failed attempts before we say "no match"
+// ---- AM (build 18): compare ENVELOPES, not waveforms ----
+// On AM the analog and the HD audio of the same programme hardly correlate as waveforms
+// (r 0.4-0.5 on KMZT 1260): an AM transmitter's audio processor runs the analog through a
+// "phase rotator" (an all-pass network that turns asymmetric waveforms symmetric, for more
+// positive-peak modulation) and the HD feed gets none of it, so the two have the same
+// loudness contour but different wave shapes. The contour is what the ear times by, so on AM
+// the histories hold the ENVELOPE: |audio| through two one-pole low-passes at ENV_LPF_HZ and a
+// high-pass at ENV_HPF_HZ (zero mean, as the correlation expects). The corner was chosen on
+// two stations (KMZT 1260 classical music, KBRT 740 speech, 2026-10-16): the lower the smoother
+// the contour and the better the match - 200 Hz gave r 0.50-0.83, 30 Hz r 0.71-0.90 (waveforms:
+// 0.41-0.58) - and the lag between measurements held to +-1.5 ms on a clean signal, +-2 ms
+// on speech with dropouts (KBRT at its edge). That is why "agree" and "jump" are wider on AM
+// (ENV_AGREE_FRAMES / ENV_JUMP_FRAMES, set with the mode) than FM's 3 / 200 frames. Finer than
+// a millisecond would mean nothing there anyway: with the phase rotation, the two waveforms
+// never line up exactly at any lag.
+static const double ENV_LPF_HZ = 30.0, ENV_HPF_HZ = 5.0;
+static const int    ENV_AGREE_FRAMES = 200;            // 4.5 ms
+static const int    ENV_JUMP_FRAMES  = 800;            // 18 ms
+static const float  ENV_MIN_COVER = 0.3f;              // envelopes: the HD stretch must be at least this much real audio,
+static const float  ENV_MAX_GAIN_DB = 12.0f;           // and the two must be within this of each other in loudness.
+                                                       // (A stretch that is mostly nrsc5's zero-filled pieces has an
+                                                       // envelope that is a flat line with a step in it, and a step
+                                                       // correlates with anything - seen on KMZT after a sync loss:
+                                                       // "4568 ms, r 0.89, analog -21 dB" with 13 % of the HD there.
+                                                       // The same programme is never 21 dB apart; blend.hpp's level
+                                                       // match stops at 12 dB anyway. True matches with half the HD
+                                                       // missing were seen too, so the cover rule alone stays loose.)
 
 // ---- Tiny radix-2 FFT (complex, in place) --------------------------------------------------
 // The textbook Cooley-Tukey algorithm; n must be a power of two. Only used for the coarse search,
@@ -142,6 +169,23 @@ private:
     std::vector<float> h, hist; int n = 0, m = 1, pos = 0, phase = 0;
 };
 
+// The envelope follower for the AM mode (one per stream): |x| -> two one-pole low-passes ->
+// a one-pole high-pass.
+struct EnvFollower {
+    float l1 = 0, l2 = 0, hx = 0, hy = 0, a = 0, ah = 0;
+    void init() {
+        a = (float)(1 - std::exp(-2 * M_PI * ENV_LPF_HZ / FRAME_RATE));
+        ah = (float)std::exp(-2 * M_PI * ENV_HPF_HZ / FRAME_RATE);
+        l1 = l2 = hx = hy = 0;
+    }
+    inline float push(float x) {
+        x = std::fabs(x);
+        l1 += a * (x - l1); l2 += a * (l1 - l2);
+        float y = l2 - hx + ah * hy; hx = l2; hy = y;
+        return y;
+    }
+};
+
 struct Result {
     bool  accepted = false;
     long long offsetFrames = 0;   // analog index - HD index (44.1 kHz frames), > 0 = HD ahead
@@ -189,6 +233,17 @@ public:
         envAccA_ = envAccH_ = 0; envCntA_ = envCntH_ = 0;
         results_.clear(); status_ = Status(); nextTryFrame_ = 0; failures_ = 0;
         hintFrames_ = (long long)(EXPECTED_D_SECONDS * FRAME_RATE); hintFailed_ = false;
+        envFa_.init(); envFh_.init();
+    }
+
+    // AM (build 18): compare envelopes instead of waveforms, with the wider "agree" / "jump"
+    // figures (see ENV_* above). Call right after reset(), before any audio. Off = FM, as ever.
+    void setEnvelopeMode(bool on) {
+        std::lock_guard<std::mutex> lock(m_);
+        envMode_ = on;
+        agreeFrames_ = on ? ENV_AGREE_FRAMES : AGREE_FRAMES;
+        jumpFrames_ = on ? ENV_JUMP_FRAMES : JUMP_FRAMES;
+        envFa_.init(); envFh_.init();
     }
 
     // Expected real-time offset (frames) to search around first, or LLONG_MIN = full search.
@@ -204,7 +259,7 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         for (size_t i = 0; i < n; i++) {
             float v = mono[i];
-            decA_.push(v, [this](float d) { histA_[(size_t)(aNext_ / DECIM) % histLen_] = d; });
+            decA_.push(envMode_ ? envFa_.push(v) : v, [this](float d) { histA_[(size_t)(aNext_ / DECIM) % histLen_] = d; });
             envAccA_ += v * v;
             if (++envCntA_ == ENV_FRAMES) {
                 envA_[(size_t)(aNext_ / ENV_FRAMES) % envLen_] = envAccA_ / ENV_FRAMES;
@@ -265,6 +320,7 @@ public:
             }
             envAccH_ = 0; envCntH_ = 0;
             decH_.init(histTaps(), DECIM);
+            envFh_.init();
         }
         // Narrow down the block uncertainty: the run's true start E0 = E_k - framesSoFar lies in
         // [blockStart_k - framesSoFar, blockStart_k + blockLen_k - framesSoFar) for every piece k.
@@ -274,7 +330,7 @@ public:
         size_t frames = count / 2;
         for (size_t i = 0; i < frames; i++) {
             float v = (stereo[2 * i] + stereo[2 * i + 1]) * (0.5f / 32768.0f);
-            decH_.push(v, [this](float d) { histH_[(size_t)(hdNext_ / DECIM) % histLen_] = d; });
+            decH_.push(envMode_ ? envFh_.push(v) : v, [this](float d) { histH_[(size_t)(hdNext_ / DECIM) % histLen_] = d; });
             envAccH_ += v * v;
             if (++envCntH_ == ENV_FRAMES) {
                 envH_[(size_t)(hdNext_ / ENV_FRAMES) % envLen_] = envAccH_ / ENV_FRAMES;
@@ -304,6 +360,7 @@ public:
         aNext_ = frame / DECIM * DECIM;
         envAccA_ = 0; envCntA_ = 0;
         decA_.init(histTaps(), DECIM);
+        envFa_.init();
         nextTryFrame_ = aNext_ + (long long)(TEMPLATE_SECONDS * FRAME_RATE);
         status_.analogFrames = aNext_;
         // The analog frames are numbered afresh from here (the demodulator's own delay, ~20
@@ -400,7 +457,8 @@ public:
             eh += h;
         }
         float gainDb = (ea > 0 && eh > 0) ? (float)(10.0 * std::log10(ea / eh)) : 0.f;
-        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, rFine >= ACCEPT_CORR, usedHint, gainDb, cover);
+        const bool accepted = rFine >= ACCEPT_CORR && (!envMode_ || (cover >= ENV_MIN_COVER && std::fabs(gainDb) <= ENV_MAX_GAIN_DB));
+        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, accepted, usedHint, gainDb, cover);
     }
 
 private:
@@ -429,7 +487,7 @@ private:
             status_.corr = r;
             // After a sync loss nrsc5 can line its output up differently (seen: exactly
             // one 2,048-frame piece later) -> the old results are wrong now, start over.
-            if (!results_.empty() && std::llabs(offsetFrames - status_.offsetFrames) > JUMP_FRAMES) {
+            if (!results_.empty() && std::llabs(offsetFrames - status_.offsetFrames) > jumpFrames_) {
                 results_.clear();
                 status_.jumps++; status_.epoch++;
             }
@@ -443,7 +501,7 @@ private:
             status_.gainDb = gains[gains.size() / 2];
             status_.dMs = (float)((status_.offsetFrames - corr) * 1000.0 / FRAME_RATE);
             size_t n = results_.size();
-            bool agree = n >= 2 && std::llabs(results_[n - 1].offsetFrames - results_[n - 2].offsetFrames) <= AGREE_FRAMES;
+            bool agree = n >= 2 && std::llabs(results_[n - 1].offsetFrames - results_[n - 2].offsetFrames) <= agreeFrames_;
             status_.state = agree ? 2 : 1;
             // Re-measure every 5 s - but confirm a first result after 1 s already (the
             // blend waits for two agreeing results, so this gets the HD in ~4 s sooner).
@@ -519,6 +577,8 @@ private:
     std::vector<Result> results_; Status status_;
     long long nextTryFrame_ = 0; int failures_ = 0;
     long long hintFrames_ = LLONG_MIN; bool hintFailed_ = false;
+    bool envMode_ = false; EnvFollower envFa_, envFh_;                  // AM: envelopes (setEnvelopeMode)
+    int agreeFrames_ = AGREE_FRAMES, jumpFrames_ = JUMP_FRAMES;
 };
 
 } // namespace align

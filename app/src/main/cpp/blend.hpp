@@ -92,17 +92,19 @@
 namespace blend {
 
 static const int RATE = 44100;
-static const size_t ANALOG_RING = (size_t)RATE * 4;       // 4 s of analog (stereo frames; only ~0.3 s is ever waiting)
+static const size_t ANALOG_RING = (size_t)RATE * 8;       // 8 s of analog (stereo frames; FM: only ~0.3 s is ever waiting, AM ~3 s)
 static const size_t HD_RING = (size_t)RATE * 6;           // 6 s of stereo: holds the ~2.5 s delay + look-ahead
 static const long long FADE_FRAMES = RATE / 2;            // 0.5 s crossfade (raised cosine)
 static const long long GUARD_FRAMES = RATE * 3 / 20;      // the fade must END this long (0.15 s) before a bad frame
 static const long long CLEAN_FRAMES = RATE * 2;           // HD must be good this far ahead before we fade to it
-static const long long RESTART_LATENCY = RATE * 3 / 10;   // play 0.3 s behind the newest analog after a (re)start
+static const long long RESTART_LATENCY = RATE * 3 / 10;   // play 0.3 s behind the newest analog after a (re)start (FM; see setRestartLatency)
+static const long long FALL_BEHIND = RATE * 36 / 10;      // the reader this far behind its usual place (3.6 s: it was paused?) skips forward
 static const long long UNALIGNED_LATENCY = RATE * 3 / 10; // unaligned HD plays this far behind live (like Digital only)
 static const long long UNALIGNED_CLEAN = RATE / 5;        // ... so only this much look-ahead exists then
 static const long long NOMATCH_FRAMES = RATE * 20;        // "no match" counts from this long after tuning
 static const long long HD_HELD_RESET = RATE * 10;         // HD held this long = the flapping counter starts over
-static const int OFFSET_TOLERANCE = 3;                    // the aligner's median may wobble this much (frames)
+static const int OFFSET_TOLERANCE = 3;                    // the aligner's median may wobble this much (frames) - FM
+static const int OFFSET_TOLERANCE_AM = 200;               // ... AM (envelope alignment, aligner.hpp): 4.5 ms
 static const float GAIN_SLEW_DB_PER_S = 2.0f;             // how fast the analog level follows the measured match
 static const float MAX_MATCH_DB = 12.0f;                  // never scale the analog by more than this either way
 // After a fade back to analog, wait this long before trying HD again - longer
@@ -189,6 +191,30 @@ public:
         foreign_ = yes;
     }
 
+    // How far behind the newest analog the blend plays after a (re)start. FM: 0.3 s
+    // (RESTART_LATENCY, the default) - the HD runs ~2.5 s ahead of the analog there, so the
+    // 2 s look-ahead costs no latency. AM (1.1): nrsc5's AM audio comes out IN STEP with the
+    // station's analog (measured on KMZT 1260: 0 +- 0.1 s - the station's analog delay happens
+    // to equal nrsc5's AM decoding latency), so the only way to see a dropout 2 s ahead is to
+    // play the analog ~3 s behind live. Analog only is not affected (it plays from its own
+    // ring, live). Not cleared by reset() - native-lib sets it on every tune.
+    void setRestartLatency(long long frames) {
+        std::lock_guard<std::mutex> lock(m_);
+        latency_ = std::max(0LL, std::min((long long)ANALOG_RING - RATE, frames));
+        // The reader always keeps this much back (0 on FM, as ever): right after a tune the ring
+        // is empty, so without it the reader would simply play everything as it arrives and the
+        // latency would be one block, not 3 s.
+        holdBack_ = std::max(0LL, latency_ - RESTART_LATENCY);
+    }
+    // How far the aligner's figure may move before the blend re-aligns (fade out, new offset,
+    // fade in): 3 frames on FM, where the alignment is good to a fraction of a frame; 100 on
+    // AM, where it is an envelope alignment good to a millisecond or two (aligner.hpp).
+    // Not cleared by reset() - native-lib sets it on every tune.
+    void setOffsetTolerance(int frames) {
+        std::lock_guard<std::mutex> lock(m_);
+        tolerance_ = std::max(0, frames);
+    }
+
     // Streaming thread: analog audio as it comes out of the demodulator (stereo,
     // interleaved L R, `frames` frames; already scaled and clamped to -1..1 - the
     // aligner gets the same audio as mono).
@@ -235,7 +261,17 @@ public:
     // IQ time line, so jump the analog frame counter forward to `frame`.
     void skipAnalogTo(long long frame) {
         std::lock_guard<std::mutex> lock(m_);
-        if (frame > aWritten_) { aWritten_ = frame; restart_ = true; }
+        if (frame <= aWritten_) return;
+        // The frames in between were never received: silence, not what the ring still held
+        // from a lap ago. (Found in build 18's bit-for-bit check: until then the first 0.3 s
+        // after Digital only -> Auto came out of the ring as it stood - analog audio from 4 s
+        // earlier, or from the Analog-only period before - which is why that run's audio
+        // changed when the ring grew to 8 s. The only FM audio build 18 changes.)
+        for (long long f = std::max(aWritten_, frame - (long long)ANALOG_RING); f < frame; f++) {
+            size_t slot = (size_t)(f % (long long)ANALOG_RING);
+            analog_[slot * 2] = 0; analog_[slot * 2 + 1] = 0;
+        }
+        aWritten_ = frame; restart_ = true;
     }
 
     // The next read() starts afresh near the newest analog (after a program
@@ -248,8 +284,8 @@ public:
     // Analog frames ready to play (for the audio player's pre-buffer).
     size_t available() const {
         std::lock_guard<std::mutex> lock(m_);
-        long long p = restart_ ? std::max(0LL, aWritten_ - RESTART_LATENCY) : play_;
-        return (size_t)std::max(0LL, aWritten_ - p);
+        long long p = restart_ ? std::max(0LL, aWritten_ - latency_) : play_;
+        return (size_t)std::max(0LL, aWritten_ - holdBack_ - p);
     }
 
     // Audio thread: up to `frames` stereo frames into `out` (interleaved). Waits up
@@ -259,7 +295,7 @@ public:
     size_t read(int16_t *out, size_t frames, int timeoutMs, const align::Status &al) {
         std::unique_lock<std::mutex> lock(m_);
         if (restart_) {
-            play_ = std::max(0LL, aWritten_ - RESTART_LATENCY);
+            play_ = std::max(0LL, aWritten_ - latency_);
             restart_ = false;
             if (state_ != ANALOG) { state_ = ANALOG; ramp_ = 0; }   // start on the analog...
             hdStreak_ = 0; dwellUntil_ = 0;
@@ -270,13 +306,15 @@ public:
             // so there this changes nothing.
             resume_ = true;
         }
-        if (play_ < aWritten_ - (long long)ANALOG_RING + RATE / 10) {
+        if (play_ < aWritten_ - latency_ - FALL_BEHIND) {
             // The reader fell far behind (it was paused?): skip forward, like the rings do.
-            play_ = aWritten_ - RESTART_LATENCY;
+            // (FM: 3.9 s behind the newest analog, exactly as before the latency became settable.)
+            play_ = aWritten_ - latency_;
         }
-        cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return aWritten_ > play_; });
-        size_t n = (size_t)std::min<long long>((long long)frames, aWritten_ - play_);
-        if (n == 0) return 0;
+        cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return aWritten_ - holdBack_ > play_; });
+        const long long ready = aWritten_ - holdBack_ - play_;   // (negative while the hold-back fills, AM)
+        if (ready <= 0) return 0;
+        size_t n = (size_t)std::min<long long>((long long)frames, ready);
 
         // Level match (analog -> HD loudness), aimed at the aligner's measurement.
         if (al.accepted > 0) matchTargetDb_ = std::max(-MAX_MATCH_DB, std::min(MAX_MATCH_DB, -al.gainDb));
@@ -413,7 +451,7 @@ private:
         // new figure, fade back in, instead of jumping in the middle of the HD.
         long long look = aligned_ ? FADE_FRAMES + GUARD_FRAMES : UNALIGNED_CLEAN;
         bool bad = !hdClean(play_ - offset_, look);
-        bool realign = aligned_ && alignedOk && std::llabs(al.offsetFrames - offset_) > OFFSET_TOLERANCE;
+        bool realign = aligned_ && alignedOk && std::llabs(al.offsetFrames - offset_) > tolerance_;
         if (bad || realign) {
             if (state_ != TO_ANALOG) {
                 startFade(TO_ANALOG, aligned_, offset_, bad ? "dropout ahead" : "re-aligning");
@@ -500,6 +538,9 @@ private:
     int returns_ = 0; long long dwellUntil_ = 0, hdStreak_ = 0;
     float matchDb_ = 0, matchTargetDb_ = 0, matchLin_ = 1.0f;
     bool unmatchedPlaysHd_ = true; bool reversible_ = false;
+    long long latency_ = RESTART_LATENCY;                 // setRestartLatency (FM 0.3 s, AM ~3 s)
+    long long holdBack_ = 0;                              // ... and what the reader always keeps back (FM 0, AM 2.7 s)
+    int tolerance_ = OFFSET_TOLERANCE;                    // setOffsetTolerance (FM 3, AM 200 frames)
     bool resume_ = false;                                 // a (re)start is waiting for its first decide()
     int sameStation_ = SAME_UNKNOWN;                      // setSameStation
     // "The HD plays alone"

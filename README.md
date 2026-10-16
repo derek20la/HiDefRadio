@@ -21,7 +21,8 @@ No root, no computer, no internet connection needed. Everything you hear and see
 - **HD Radio on FM**: HD1 and the extra programs (HD2, HD3, HD4 ... up to eight). A button appears for each program the station actually carries.
 - **Analog FM in stereo**, with a stereo-to-mono blend as the signal gets noisy.
 - **RDS / RBDS** on analog FM: call letters, program type, RadioText, and song title and artist where the station sends them.
-- **HD Radio on AM** (digital only for now, and new - see [Known limits](#known-limits)). It needs a dongle that can tune AM, such as the RTL-SDR Blog V4.
+- **HD Radio on AM**. It needs a dongle that can tune AM, such as the RTL-SDR Blog V4.
+- **Analog AM** (version 1.1, in the engine on `main` - the screens still say "AM is HD only" until the next build): a synchronous detector, which is what HD-ready AM radios use, with the same blend to HD as on FM, and **C-QUAM AM stereo** for the few dozen US stations that still send it. See [Known limits](#known-limits).
 - Band plans for the Americas, Europe and most of the world, Japan and Brazil, each with the right FM de-emphasis (75 or 50 µs).
 
 ### The blend
@@ -118,9 +119,9 @@ RTL-SDR dongle --USB--> libusb + librtlsdr (opened with Android's USB permission
               +------------+-------------+
               |                          |
               v                          v
-      nrsc5 (pipe mode)            fmdemod.hpp
+      nrsc5 (pipe mode)            fmdemod.hpp (FM) / amdemod.hpp (AM)
       HD audio, station name,      analog FM in stereo, signal meter
-      song info, logos, art        rds.hpp: RDS / RBDS
+      song info, logos, art        rds.hpp: RDS / RBDS; C-QUAM AM stereo
               |                          |
               |                    drift.hpp
               |                    puts the analog audio on the station's clock
@@ -144,7 +145,7 @@ One stream of samples from the dongle feeds both decoders. That does not put the
 The short version is below. [docs/how-the-blend-works.md](docs/how-the-blend-works.md) walks through it step by step for radio hobbyists, with pictures of the time line and pointers into the code.
 
 1. **Analog first.** The FM demodulator has sound within a second of tuning. The HD decoder needs a few seconds to sync and to produce its first audio.
-2. **Measure the delay.** A station delays its analog audio so that a receiver's HD decoder has time to catch up (the "diversity delay"). nrsc5 decodes faster than that, so in this app the HD audio comes out about 2.5 seconds before the same sound arrives on the analog side. The figure is close to 2.485 s on most Los Angeles stations, but a few are tens of milliseconds off and one wanders from day to day, so `aligner.hpp` measures it on every tune by cross-correlating the two audio streams. A match is accepted only when the correlation is at least 0.5.
+2. **Measure the delay.** A station delays its analog audio so that a receiver's HD decoder has time to catch up (the "diversity delay"). nrsc5 decodes faster than that, so in this app the HD audio comes out about 2.5 seconds before the same sound arrives on the analog side. The figure is close to 2.485 s on most Los Angeles stations, but a few are tens of milliseconds off and one wanders from day to day, so `aligner.hpp` measures it on every tune by cross-correlating the two audio streams. A match is accepted only when the correlation is at least 0.5. (AM is different in two ways, both found on KMZT 1260 and KBRT 740: nrsc5's AM audio comes out *in step* with the analog, not 2.5 s early, so in Auto the analog on AM plays about 3 s behind live to give the look-ahead its room; and the two waveforms hardly correlate at all, because an AM transmitter's audio processor runs the analog through a phase rotator the HD feed never sees - so on AM the aligner compares loudness envelopes, which match at 0.7 to 0.9 and line up to a millisecond or two.)
 3. **Keep the two clocks together.** The HD audio comes at exactly 44,100 frames per second of the station's time. The analog audio comes at 44,100 frames per second of the dongle's time, and a dongle's crystal can be far off: 1 part per million with a TCXO (RTL-SDR Blog V3 and V4), 30 to 100 ppm without one. At 57 ppm the analog gains 2.5 frames on the HD every second, so two measurements five seconds apart never agree and the blend would never start. `drift.hpp` resamples the analog audio by the missing few millionths. It gets a first figure from the tuning error (one crystal sets both the tuner frequency and the sample clock, so a station that shows up 5.4 kHz low at 94.5 MHz means a clock 57 ppm fast) and then the exact one from a straight-line fit through the aligner's own measurements. The tuning error stays the referee: the fit counts only once at least four measurements lie on a tight line, and it may not move the figure more than 8 ppm away from the tuning error unless half a minute of measurements prove the tuning error wrong. (On a station whose analog and HD audio are processed differently, single measurements land 10 to 20 frames off. Without this rule one of them can send the correction 40 ppm astray, which is what a tester's video showed.) The HD audio is never touched.
 4. **Match the loudness.** The aligner also measures how much louder one side is, and the blend brings the analog to the HD's level. The station's own "digital audio gain" field (which nrsc5 reports but does not apply) is applied to the HD audio first.
 5. **Crossfade.** Once a match is confirmed and the next two seconds of HD are clean, `blend.hpp` crossfades over half a second. The two streams are lined up to within one audio sample, so there is no echo and no skip.
@@ -158,8 +159,9 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
 - `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. A network source (rtl_tcp) is planned to plug in beside it.
-- Next to it are eight self-contained C++17 headers with no Android code in them:
+- Next to it are nine self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter). `vec4.hpp` next to it is its four-floats-at-a-time layer: NEON on arm64, plain C++ anywhere else.
+  - `amdemod.hpp`: the analog AM demodulator - carrier PLL, synchronous detector, carrier-to-noise meter, C-QUAM stereo. It reuses the FM file's filters.
   - `rds.hpp`: the RDS / RBDS decoder. It needs nothing but the FM multiplex signal.
   - `drift.hpp`: the clock correction. A small resampler, and the tracker that works out the dongle's clock error.
   - `aligner.hpp`: measures the analog-vs-HD time offset and loudness difference.
@@ -184,14 +186,14 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 - After every tune you hear about ten seconds of analog before the HD takes over. Measuring the alignment takes that long.
 - In Auto, HD1 plays about 2.5 seconds behind Digital only. That delay is what makes the look-ahead possible.
-- AM is HD only. Analog AM, with the blend, is planned for version 1.1.
+- Analog AM (1.1) has so far been proven on recordings of two stations (KMZT 1260, KBRT 740) in the desktop harness, not yet on the phone; the audio bandwidth is fixed at 5 kHz for now (the engine can do 2-10 kHz; a setting is to come). C-QUAM stereo is proven on a made-up signal only - no C-QUAM station is within reach of Los Angeles - so which channel is the left one has not been confirmed on the air. The clock correction does not run on AM (the envelope alignment is not fine enough to measure a crystal); with a non-TCXO dongle the blend re-aligns about every 40 s there.
 - AM HD has had little on-air testing: one station (KMZT 1260 kHz in Los Angeles) heard on the phone with an RTL-SDR Blog V4, plus off-air recordings run through the app's engine (`tools/harness`). AM with a V3 has not been tried yet.
 - 64-bit ARM phones only.
 - Most testing so far has been in the Los Angeles area. Testers have run it in other places and on other phones and dongles too, and more reports are what the closed test is for.
 
 ## Plans
 
-- **1.1**: analog AM with the blend, and C-QUAM AM stereo.
+- **1.1**: analog AM with the blend and C-QUAM AM stereo (the engine is done; the screens, settings and welcome card follow), and an rtl_tcp network source.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses

@@ -248,6 +248,63 @@ Analog only, KOST with its dropouts and four source switches, KKLA (no HD, the s
 KKLQ, AM 1260 on a V4, AM 1260 on a V3 (direct sampling: no gain calls at all, also when the
 gain is asked for), KRTH on a V3, and a dongle that fails to open.
 
+## Analog AM (build 18): amtest, and AM in apptest
+
+Build 18 gives the AM band its analog side (`amdemod.hpp`: synchronous detector, C-QUAM
+stereo) and lets the aligner and the blend work on AM. Three tools:
+
+    build/amtest                                   # amdemod.hpp alone on made-up signals: 30 checks, PASS / FAIL
+    build/amtest 1260-1.cu8 out.wav [secs] [bw]    # a recording: the meter once a second, the audio as a WAV
+    build/amtest gen plain|cquam out.cu8 [secs]    # a made-up AM station as a .cu8 for apptest (no HD)
+    IQFILE=1260-1.cu8 IQSTEP=1 UNMATCHED=hd WAVOUT=am.wav build/apptest 1260000 2 46   # the whole engine, AM in Auto
+
+The made-up signals come from the standards' formulas, not from the decoder's idea of them:
+plain AM = (1 + m) cos(wt), C-QUAM = (1 + L + R) cos(wt + atan((L - R) / (1 + L + R))) with
+the 25 Hz pilot at 4 %. The checks: a 50 % tone comes out at 50 %, the carrier offset reads
+right, the meter reads the true carrier-to-noise within 2 dB (the 8-bit rounding of the
+samples sets a floor near 50 dB), a drifting carrier is followed, a signal in quadrature
+(where hybrid HD puts its tertiary carriers) is rejected by 32 dB, a tone on the left of a
+C-QUAM signal comes out on the LEFT at 39 dB separation with the pilot notched out of the
+audio, hdSynced switches the stereo off, noise at 28 dB C/N narrows it, and noise alone
+leaves the output bounded. The `apptest` status line for AM shows the analog side after a
+`|`: locked, carrier dBFS, C/N, offset, pilot, stereo %, bandwidth.
+
+Two things the recordings taught, both built in (the headers say more):
+
+- **On AM the HD is not 2.5 s early.** nrsc5's AM audio came out in step with the analog on
+  both stations (KMZT 1260: the analog 0.16 s ahead, KBRT 740: 0.12 s ahead), so the blend
+  plays the analog ~3 s behind live in Auto (`blend::Blender::setRestartLatency`), which gives
+  the dropout look-ahead its room. Analog only stays live.
+- **The waveforms do not match, the envelopes do.** Analog vs HD waveform correlation on AM:
+  r 0.41-0.58 (an AM transmitter's audio processor phase-rotates the analog; the HD feed is
+  untouched). So `aligner.hpp` has an envelope mode for AM (|audio| low-passed at 30 Hz):
+  r 0.72-0.95, the lag good to a millisecond or two, "agree" / "jump" widened to 200 / 800
+  frames, and the blend's re-align tolerance to 200. Two more rules keep a mostly-empty HD
+  stretch from matching by accident: at least 30 % of the HD must be real audio, and the two
+  must be within 12 dB of each other in loudness ("4568 ms, r 0.89, analog -21 dB" was a
+  step edge in zero-filled pieces after a sync loss).
+
+Results on 2026-10-16 (virtual time, Auto, "play the HD anyway"): KMZT 1260-1 (46 s): analog
+at once, aligned at 14 s, HD from 16 s to the end, 7 of 7 measurements accepted (r 0.84-0.92).
+1260-2 (61 s, two sync losses): HD at 16 s, each dropout seen ahead, back on HD at 38 and
+60 s. 1260-3: HD at 16 s. KBRT 740-1 (51 s, speech): HD at 18 s, 7 of 7 accepted (r
+0.72-0.81), two dropouts caught. 740-2: HD at 30 s. 740 (weak, BER 7 %, sync losses): stays on
+the analog - right. A made-up plain AM station without HD: the HD search rests at 30 s. A
+made-up C-QUAM station: left and right come out on the right sides in Analog only and Auto,
+mono in the mono setting.
+
+**What is still bit for bit build 17** (`cmp` on the WAVs, same harness driver): FM in every
+mode tried - KRTH Auto (50 s), KLLI Auto, KKGO HD1 -> HD2 -> HD1 -> HD4, KKLA with the search
+resting over 75 s (IQLOOP), KKLQ "stay on analog", KRTH Digital only, KRTH Analog only in
+forced stereo, KRTH with auto-gain and gain changes - and AM in Digital only on a V4 and on a
+V3 (direct sampling, no gain calls). **The one FM change:** after Digital only -> Auto the
+first 0.3 s used to come out of the analog ring as it stood (audio from a lap of the ring
+earlier); it is silence now (`blend::Blender::skipAnalogTo` clears the skipped frames). Found
+because the ring grew from 4 s to 8 s for AM's hold-back and that run's stale 0.3 s changed.
+
+Cost on the PC: the AM demodulator 8.7 ms of processor time per second of radio against the
+FM demodulator's 35 on the same machine (speed test, `SPEEDTEST=5`).
+
 ## "Comments only": objcheck.sh
 
 A change that is meant to touch only comments (the documentation pass of 2026-10-15, for one)

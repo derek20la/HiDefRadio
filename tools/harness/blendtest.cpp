@@ -179,6 +179,58 @@ int main() {
     h = hear(1.5);
     check("... and the HD is back as soon as it really arrives again", b.status().state == HD && b.status().alone && h.analog == 0);
     b.setAnalogForeign(false); b.setUnmatchedPlaysHd(false);
+
+    // --- build 18, AM: the HD IN STEP with the analog (offset ~0), the blend 3 s behind live ---
+    // On FM the HD runs 2.5 s ahead, so a 0.3 s latency leaves 2 s of look-ahead. On AM there
+    // is no such lead: nrsc5's AM audio comes out in step with the station's analog, so the
+    // blend plays ~3 s behind the newest analog (setRestartLatency) - from the first read on,
+    // not only after a restart - and the look-ahead is the same 2 s.
+    {
+        b.reset(); al = align::Status(); aW = 0;                 // (the time line starts over with the tune)
+        b.setRestartLatency(RATE * 3); b.setOffsetTolerance(200);
+        // the HD now arrives at its own index = the analog's (offset 0): change hdL's anchor
+        auto pushAm = [&](double secs) {
+            long long n = (long long)(secs * RATE);
+            static std::vector<float> a(2048 * 2, 1000.0f / 32767.0f);
+            static std::vector<int16_t> hh(2048 * 2);
+            for (long long done = 0; done < n; done += 2048) {
+                b.pushAnalog(a.data(), 2048);
+                bool drop = dropAt(aW, dropFrom, dropTo);
+                for (int i = 0; i < 2048; i++) { hh[2 * i] = drop ? 0 : hdL(aW + i); hh[2 * i + 1] = drop ? 0 : (int16_t)-hh[2 * i]; }
+                b.pushHd(hh.data(), 2048 * 2, aW);
+                aW += 2048;
+            }
+        };
+        auto playAm = [&](double secs) {
+            long long n = (long long)(secs * RATE), got = 0;
+            for (long long done = 0; done < n; done += 2048) { pushAm(2048.0 / RATE); got += (long long)b.read(out.data(), 2048, 0, al); }
+            return got;
+        };
+        dropFrom = dropTo = -1;
+        long long got = playAm(2.5);
+        check("AM: the first 2.7 s after the tune nothing is played yet (the hold-back fills)", got == 0 && b.available() == 0);
+        got = playAm(1.0);
+        check("AM: then the analog plays, ~3 s behind live", got > 0 && b.status().state == ANALOG);
+        al.state = 2; al.offsetFrames = 0; al.accepted = 2; al.gainDb = 0;     // in step: offset 0
+        playAm(3.0);
+        check("AM: aligned at offset 0 -> the HD, with the 2 s look-ahead the hold-back gives", b.status().state == HD && b.status().toHd == 1 && b.status().aligned);
+        // a dropout ~3.9 s ahead of the play position: 3.3 s later it is 0.6 s ahead and the
+        // fade to analog has started (as on FM, 0.5 s fade + 0.15 s guard before the gap)
+        dropFrom = aW + (long long)(0.4 * RATE); dropTo = dropFrom + RATE;
+        playAm(3.3);
+        check("AM: a dropout ahead is seen coming - fading to the analog before it plays", b.status().state == ANALOG || b.status().state == TO_ANALOG);
+        dropFrom = dropTo = -1;
+        playAm(6.0);
+        check("AM: ... and the HD again once the next 2 s are clean", b.status().state == HD && b.status().toHd == 2);
+        // the aligner's figure wobbles by 100 frames (an envelope alignment): no re-alignment on AM
+        al.offsetFrames = 150; playAm(1.0);
+        check("AM: the alignment moving by 150 frames does not re-align (tolerance 200)", b.status().state == HD && b.status().toAnalog == 1);
+        al.offsetFrames = 500; playAm(2.0);
+        check("AM: ... 500 frames does (as 3 would on FM)", b.status().toAnalog == 2);
+        b.setRestartLatency(RESTART_LATENCY); b.setOffsetTolerance(OFFSET_TOLERANCE); b.reset(); al = align::Status(); aW = 0;
+        got = playAm(0.5);
+        check("back to FM's figures: audio from the first block again (hold-back 0)", got > 0);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails;
 }

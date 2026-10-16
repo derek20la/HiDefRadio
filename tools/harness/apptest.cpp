@@ -138,9 +138,10 @@ int main(int argc, char **argv) {
                    kv["rdsPi"].c_str(), kv["rdsCall"].c_str(), kv["rdsCallMaybe"].empty() ? "" : " maybe ", kv["rdsCallMaybe"].c_str(),
                    kv["hdSame"].c_str(), kv["hdSameCall"].c_str(), kv["hdContest"].c_str(), kv["hdOwnPi"].empty() ? "-" : kv["hdOwnPi"].c_str(),
                    kv["blendSilent"] == "1" ? ("  SILENT " + kv["blendSilentSecs"] + " s").c_str() : "");
-            if (kv["am"] == "1")       // AM: no analog / alignment / blend - show what matters there instead
-                printf("        AM  mode %s  ber %s  kbps %s  gain %s dB (auto %s)  direct sampling %s  peak %s dBFS  '%s'\n", kv["mode"].c_str(), kv["ber"].c_str(),
-                       kv["kbps"].c_str(), kv["gainDb"].c_str(), kv["gainAuto"].c_str(), kv["direct"].c_str(), kv["peakDbfs"].c_str(), kv["station"].c_str());
+            if (kv["am"] == "1")       // AM: the HD figures, and (build 18) the analog AM demodulator's
+                printf("        AM  mode %s  ber %s  kbps %s  gain %s dB (auto %s)  direct sampling %s  peak %s dBFS  '%s'  | analog: locked %s carrier %s dBFS C/N %s dB offset %s Hz pilot %s (%s %%) stereo %s %% bw %s\n",
+                       kv["mode"].c_str(), kv["ber"].c_str(), kv["kbps"].c_str(), kv["gainDb"].c_str(), kv["gainAuto"].c_str(), kv["direct"].c_str(), kv["peakDbfs"].c_str(), kv["station"].c_str(),
+                       kv["amLocked"].c_str(), kv["amCarrierDb"].c_str(), kv["amSnrDb"].c_str(), kv["amOffsetHz"].c_str(), kv["amPilot"].c_str(), kv["amPilotPct"].c_str(), kv["amStereoPct"].c_str(), kv["amBandwidth"].c_str());
             fflush(stdout);
         }
     };

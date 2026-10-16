@@ -19,6 +19,7 @@
 #include "iqsource.hpp"        // build 17: where the samples come from (the "source split")
 #include "iqsource_usb.hpp"    // build 17: ... the dongle on the USB port (the only file that calls librtlsdr)
 #include "fmdemod.hpp"     // M11: our analog FM demodulator
+#include "amdemod.hpp"     // 1.1 (build 18): our analog AM demodulator (synchronous detector, C-QUAM)
 #include "aligner.hpp"     // M11 (11c): measures the analog-vs-HD time offset and loudness
 #include "blend.hpp"       // M11 (11d): the analog <-> HD blend ("HD Radio: Auto")
 #include "drift.hpp"            // build 6: the dongle's clock vs the station's (clock correction)
@@ -316,6 +317,29 @@ static std::atomic<int> g_deemphUs{75};                    // 11b step 2: 75 (Am
 static std::atomic<int> g_fmPilot{0};
 static std::atomic<float> g_fmPilotLevel{0.0f};
 static std::atomic<float> g_fmStereo{0.0f};
+// ======================= 1.1 (build 18): analog AM =======================
+// Below 30 MHz the analog side is amdemod.hpp instead of fmdemod.hpp: the same IQ stream, the
+// same analog ring (g_fmRing - "the analog ring"), the same clock correction, aligner and blend.
+// Until build 17 AM was HD only (decision 14); now the three audio sources work on AM as on FM.
+// Output level: 1.0 = 100 % modulation -> 0.5 (a plain AM station modulated to 100 % peaks at
+// -6 dBFS; a C-QUAM station's hard-panned sound, which comes out at 2.0, just reaches full
+// scale - see amdemod.hpp). The blend's level match does the rest. Only the streaming thread
+// touches g_am (reset before the thread starts); the figures for the screen are atomics.
+static am::Demod g_am;
+static const float AM_OUTPUT_GAIN = 0.5f;
+// In Auto on AM the analog plays ~3 s behind live (blend::Blender::setRestartLatency): nrsc5's
+// AM audio is IN STEP with the station's analog (KMZT: 0 +- 0.1 s), so the 2 s dropout
+// look-ahead needs the room. (FM keeps its 0.3 s: the HD runs 2.5 s ahead there.)
+static const long long AM_BLEND_LATENCY_FRAMES = 44100 * 3;
+static const double AM_ALIGN_SIGMA_FRAMES = 60.0;          // how much one AM alignment measurement scatters (drift.hpp)
+static std::atomic<int> g_amBandwidthHz{am::DEFAULT_BANDWIDTH_HZ};   // setAmBandwidthNative: the audio low-pass
+static std::atomic<int> g_amLocked{0};                     // a carrier is there and the PLL holds it
+static std::atomic<float> g_amCarrierDb{-99.0f};           // carrier amplitude, dB re full scale
+static std::atomic<float> g_amSnrDb{-99.0f};               // carrier-to-noise in 5 kHz (the AM S-meter)
+static std::atomic<float> g_amOffsetHz{0.0f};              // the carrier's distance from the tuned frequency
+static std::atomic<int> g_amPilot{0};                      // a C-QUAM 25 Hz pilot is there
+static std::atomic<float> g_amPilotLevel{0.0f};            // its level (1.0 = 100 % modulation; nominal 0.04)
+static std::atomic<float> g_amStereo{0.0f};                // C-QUAM stereo amount playing (0 mono .. 1 full)
 // M12: RDS (rds.hpp, inside the demodulator). The streaming thread copies the decoder's
 // status here whenever it changed; the UI reads it in getSignalNative. g_rdsMutex is a
 // LEAF lock (never held while taking another).
@@ -478,6 +502,7 @@ static drift::Tracker g_drift;
 static double g_driftRate = 0;                            // streaming thread: the correction for the next block
 static double g_idleSlip = 0;                             // streaming thread: frames "taken out" while the demodulator was off
 static std::atomic<double> g_slip{0.0};
+static bool g_driftWanted = true;                         // setClockCorrectionNative (tests); AM switches the steering off per tune
 static std::atomic<int> g_tunedHz{0};                     // the tuned frequency (the tuning error is judged against it)
 static std::vector<float> g_fixedAudio;                   // streaming thread: the analog audio on the station's clock
 static long long timelineFrame(long long iqSamples) {
@@ -524,12 +549,13 @@ static void applyIdentity() {
 // off (Derek's choice, 11c) - saves 10-20 % of a core.
 static bool demodWanted() { return g_audioSource.load() != SOURCE_HD; }
 
-// 12a step 3: and the HD decoder (nrsc5)? Only when the HD can be heard: Digital only, Auto,
-// and always on AM. In Analog only it gets no samples at all (Derek: choosing Analog only is
+// 12a step 3: and the HD decoder (nrsc5)? Only when the HD can be heard: Digital only, Auto.
+// In Analog only it gets no samples at all (Derek: choosing Analog only is
 // deliberate) - that saves the 23-34 % of a core nrsc5 burns SEARCHING on a station without
 // HD (4-5 % on one it decodes). The mirror image of 11d's "Digital only = demodulator off".
-// The streaming thread opens / closes nrsc5 when this changes (onSamples).
-static bool hdWanted() { return g_mode == NRSC5_MODE_AM || g_audioSource.load() != SOURCE_ANALOG; }
+// The streaming thread opens / closes nrsc5 when this changes (onSamples). (Until build 17 AM
+// was HD only and the decoder always ran there; since analog AM it follows the setting like FM.)
+static bool hdWanted() { return g_audioSource.load() != SOURCE_ANALOG; }
 static std::atomic<bool> g_hdOn{false};      // nrsc5 is being fed (for the screen: "HD off")
 static bool g_hdOpenFailed = false;          // streaming thread only: don't retry a failed open every block
 
@@ -654,7 +680,53 @@ static void clearAudio() {
     g_sourceFadeLeft = 0;
 }
 
-// Streaming thread: demodulate one block of samples and queue the audio.
+// Streaming thread: one block of analog audio (stereo, interleaved, already scaled and clamped
+// to -1..1) from EITHER demodulator goes the same way: into the analog ring (what "Analog only"
+// plays), through the clock correction, to the aligner (as mono) and to the blender, and the
+// clock correction learns how much to correct in the next block. Shared by the FM and the AM
+// path since build 18 (analog AM); the operations and their order are exactly those of the
+// FM-only code before it, so the FM audio is bit for bit what build 17 made.
+//   offsetHz / stationHz: what the demodulator sees as the carrier's offset, and the tuned
+//   frequency - drift.hpp's first guess of the dongle's clock error. AM passes stationHz = 0
+//   = no guess: an AM station's own carrier error (the FCC allows +-20 Hz = +-16 ppm at
+//   1.26 MHz) swamps the dongle's, so the audio measurements alone decide there.
+static void feedAnalog(std::vector<float> &out, double offsetHz, double stationHz, uint32_t len) {
+    // Scale and clamp in place (11c: the aligner gets exactly what goes into the ring).
+    size_t frames = out.size() / 2;
+    {
+        std::lock_guard<std::mutex> lock(g_audioMutex);
+        for (size_t i = 0; i < frames; i++) {
+            g_fmRing[g_fmRingWrite * 2] = (int16_t)(out[2 * i] * 32767.0f);
+            g_fmRing[g_fmRingWrite * 2 + 1] = (int16_t)(out[2 * i + 1] * 32767.0f);
+            g_fmRingWrite = (g_fmRingWrite + 1) % FM_RING_FRAMES;
+            if (g_fmRingCount == FM_RING_FRAMES) {
+                g_fmRingRead = (g_fmRingRead + 1) % FM_RING_FRAMES;   // full: drop the oldest
+                g_fmDropped++;
+            } else {
+                g_fmRingCount++;
+            }
+        }
+    }
+    // Build 6: from the dongle's clock to the station's (drift.hpp). The aligner and the
+    // blender get this corrected audio; a frame more or less than came in now and then.
+    g_fixedAudio.clear();
+    g_stretch.process(out.data(), frames, g_driftRate, g_fixedAudio);
+    size_t fixedFrames = g_fixedAudio.size() / 2;
+    const double slip = g_stretch.slip() + g_idleSlip;
+    g_slip = slip;
+    // 11b: the aligner keeps working on mono (L+R)/2 - the same signal as before stereo,
+    // whatever the blend does to L-R (its cross-correlation with HD1 is unchanged).
+    static std::vector<float> mono;              // streaming thread only
+    mono.resize(fixedFrames);
+    for (size_t i = 0; i < fixedFrames; i++) mono[i] = 0.5f * (g_fixedAudio[2 * i] + g_fixedAudio[2 * i + 1]);
+    long long timeline = g_align.pushAnalog(mono.data(), fixedFrames);   // 11c (its own lock, taken after ours - never inside)
+    g_blend.pushAnalog(g_fixedAudio.data(), fixedFrames);   // 11d (likewise; wakes the reader in Auto). 11b: stereo
+    out.clear();
+    // ... and how much to correct in the next block.
+    g_driftRate = g_drift.update(timeline, slip, offsetHz, stationHz, (double)len / 2.0 / SAMPLE_RATE);
+}
+
+// Streaming thread: demodulate one block of samples (analog FM) and queue the audio.
 static void demodAnalog(const unsigned char *buf, uint32_t len) {
     const double cpu0 = threadCpuMs();               // build 12: this thread's processor time, not the wall clock
     g_fm.setStereoMode(g_stereoMode.load());         // 11b: the setting (changed from the engine thread)
@@ -662,46 +734,13 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
     g_fm.processCu8(buf, len);
     std::vector<float> &out = g_fm.audioOut;         // 11b: stereo, interleaved L R
     if (!out.empty()) {
-        // Scale and clamp in place (11c: the aligner gets exactly what goes into the ring).
         for (float &v : out) {
             v *= FM_OUTPUT_GAIN;
             if (v > 1.0f) v = 1.0f; else if (v < -1.0f) v = -1.0f;
         }
-        size_t frames = out.size() / 2;
-        {
-            std::lock_guard<std::mutex> lock(g_audioMutex);
-            for (size_t i = 0; i < frames; i++) {
-                g_fmRing[g_fmRingWrite * 2] = (int16_t)(out[2 * i] * 32767.0f);
-                g_fmRing[g_fmRingWrite * 2 + 1] = (int16_t)(out[2 * i + 1] * 32767.0f);
-                g_fmRingWrite = (g_fmRingWrite + 1) % FM_RING_FRAMES;
-                if (g_fmRingCount == FM_RING_FRAMES) {
-                    g_fmRingRead = (g_fmRingRead + 1) % FM_RING_FRAMES;   // full: drop the oldest
-                    g_fmDropped++;
-                } else {
-                    g_fmRingCount++;
-                }
-            }
-        }
-        // Build 6: from the dongle's clock to the station's (drift.hpp). The aligner and the
-        // blender get this corrected audio; a frame more or less than came in now and then.
-        g_fixedAudio.clear();
-        g_stretch.process(out.data(), frames, g_driftRate, g_fixedAudio);
-        size_t fixedFrames = g_fixedAudio.size() / 2;
-        const double slip = g_stretch.slip() + g_idleSlip;
-        g_slip = slip;
-        // 11b: the aligner keeps working on mono (L+R)/2 - the same signal as before stereo,
-        // whatever the blend does to L-R (its cross-correlation with HD1 is unchanged).
-        static std::vector<float> mono;              // streaming thread only
-        mono.resize(fixedFrames);
-        for (size_t i = 0; i < fixedFrames; i++) mono[i] = 0.5f * (g_fixedAudio[2 * i] + g_fixedAudio[2 * i + 1]);
-        long long timeline = g_align.pushAnalog(mono.data(), fixedFrames);   // 11c (its own lock, taken after ours - never inside)
-        g_blend.pushAnalog(g_fixedAudio.data(), fixedFrames);   // 11d (likewise; wakes the reader in Auto). 11b: stereo
-        g_fm.audioOut.clear();
         g_fmCarrierDb = g_fm.carrierDbfs();
         g_fmOffsetHz = g_fm.freqOffsetHz();
-        // ... and how much to correct in the next block.
-        g_driftRate = g_drift.update(timeline, slip, g_fm.freqOffsetHz(), (double)g_tunedHz.load(),
-                                     (double)len / 2.0 / SAMPLE_RATE);
+        feedAnalog(out, g_fm.freqOffsetHz(), (double)g_tunedHz.load(), len);
         g_fmQuietDb = g_fm.quietingDb();             // 9k
         g_fmPilot = g_fm.pilot() ? 1 : 0;            // 11b
         g_fmPilotLevel = g_fm.pilotLevel();
@@ -730,6 +769,37 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
     double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
     double usedMs = threadCpuMs() - cpu0;
     if (blockMs > 0) g_fmLoad.add(usedMs, blockMs, g_fmLoadPct);   // 9i: 1 s average
+}
+
+// Streaming thread (build 18): the same for analog AM (amdemod.hpp). No RDS, no station
+// identity on AM (an AM station sends no RDS; whose HD it is comes from the HD itself).
+// hdSynced: is nrsc5 in sync right now? Then this is a hybrid HD station and C-QUAM stereo is
+// off (the HD's own carriers sit in the quadrature - amdemod.hpp explains).
+static void demodAm(const unsigned char *buf, uint32_t len, bool hdSynced) {
+    const double cpu0 = threadCpuMs();
+    g_am.setStereoMode(g_stereoMode.load());         // one stereo setting serves FM and AM
+    g_am.setBandwidth(g_amBandwidthHz.load());
+    g_am.setHdSynced(hdSynced);
+    g_am.processCu8(buf, len);
+    std::vector<float> &out = g_am.audioOut;
+    if (!out.empty()) {
+        for (float &v : out) {
+            v *= AM_OUTPUT_GAIN;
+            if (v > 1.0f) v = 1.0f; else if (v < -1.0f) v = -1.0f;
+        }
+        g_amCarrierDb = g_am.carrierDbfs();
+        g_amOffsetHz = g_am.freqOffsetHz();
+        feedAnalog(out, g_am.freqOffsetHz(), 0.0 /* no clock guess from the tuning offset on AM */, len);
+        g_amSnrDb = g_am.snrDb();
+        g_amLocked = g_am.locked() ? 1 : 0;
+        g_amPilot = g_am.pilot() ? 1 : 0;
+        g_amPilotLevel = g_am.pilotLevel();
+        g_amStereo = g_am.stereoAmount();
+    }
+    if (g_audioSource.load() == SOURCE_ANALOG) g_audioCv.notify_one();
+    double blockMs = len / 2.0 / SAMPLE_RATE * 1000.0;
+    double usedMs = threadCpuMs() - cpu0;
+    if (blockMs > 0) g_fmLoad.add(usedMs, blockMs, g_fmLoadPct);   // the "demod N %" figure, AM or FM
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1310,6 +1380,28 @@ static void benchMain() {
             pilot = d->pilot();
             note();
         }
+    } else {
+        // Build 18: the AM demodulator (amdemod.hpp) the same way. C-QUAM's stereo path only
+        // runs on a station that sends the pilot, so the figure says whether it did.
+        for (int run = 0; run < bench::RUNS; run++) {
+            g_benchStep = run + 1;
+            std::unique_ptr<am::Demod> d(new am::Demod());
+            d->setStereoMode(g_stereoMode.load());
+            d->setBandwidth(g_amBandwidthHz.load());
+            int blocks = 0, stereoBlocks = 0;
+            const double c0 = threadCpuMs();
+            for (size_t at = 0; at < total; at += block) {
+                d->processCu8(iq + at, std::min(block, total - at));
+                d->audioOut.clear();
+                blocks++;
+                if (d->stereoAmount() > 0.f) stereoBlocks++;
+            }
+            fmMs[run] = (threadCpuMs() - c0) / radioS;
+            if (fmBest < 0 || fmMs[run] < fmBest) fmBest = fmMs[run];
+            stereoPct = blocks > 0 ? (int)(100.0 * stereoBlocks / blocks + 0.5) : 0;
+            pilot = d->pilot();
+            note();
+        }
     }
 
     // 3. The HD decoder: a fresh one each run, timed block by block.
@@ -1360,6 +1452,14 @@ static void benchMain() {
         else snprintf(what, sizeof(what), "%s", g_stereoMode.load() == fm::STEREO_MONO ? "mono (set to mono)"
                                                : pilot ? "mono (too noisy for stereo)" : "mono (no pilot)");
         snprintf(line, sizeof(line), "FM demodulator: %.1f ms per second of radio, %s (runs: %s)\n", fmBest,
+                 what, benchRuns(fmMs, bench::RUNS).c_str());
+        out += line;
+    } else {
+        char what[64];
+        if (stereoPct > 0) snprintf(what, sizeof(what), "C-QUAM stereo on %d %% of the time", stereoPct);
+        else snprintf(what, sizeof(what), "%s", g_stereoMode.load() == am::STEREO_MONO ? "mono (set to mono)"
+                                               : pilot ? "mono (too noisy for stereo)" : "mono (no C-QUAM pilot)");
+        snprintf(line, sizeof(line), "AM demodulator: %.1f ms per second of radio, %s (runs: %s)\n", fmBest,
                  what, benchRuns(fmMs, bench::RUNS).c_str());
         out += line;
     }
@@ -1480,7 +1580,8 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
         hdSynced = g_status.synced || g_status.syncCount != g_hdSyncsSeen;
         g_hdSyncsSeen = g_status.syncCount;
     }
-    const bool restApplies = g_nrsc5 != nullptr && g_mode == NRSC5_MODE_FM && g_audioSource.load() == SOURCE_AUTO
+    // (Build 18: on AM too, now that AM has an analog side to listen to while the search rests.)
+    const bool restApplies = g_nrsc5 != nullptr && g_audioSource.load() == SOURCE_AUTO
                              && g_program.load() == 0 && g_hdRestAllowed.load();
     const double blockAtS = (double)g_iqBlockStart / SAMPLE_RATE;      // seconds of samples since the tune
     const bool feedHd = g_hdSearch.step(blockAtS, restApplies, hdSynced);
@@ -1518,12 +1619,14 @@ static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
     }
     g_iqPos += len / 2;
 
-    // M11: analog FM too (FM band only). 11c: also in Digital only, for the aligner.
+    // M11: analog FM too. 11c: also in Digital only, for the aligner.
     // 11d: no longer - Digital only means digital only (the demodulator, the aligner
     // and the blend are off, saving 10-20 % of a core); Auto and Analog only run it.
-    if (g_mode == NRSC5_MODE_FM && demodWanted()) {
-        demodAnalog(buf, len);
-    } else if (g_mode == NRSC5_MODE_FM) {
+    // Build 18: and analog AM below 30 MHz (amdemod.hpp), the same way.
+    if (demodWanted()) {
+        if (g_mode == NRSC5_MODE_FM) demodAnalog(buf, len);
+        else demodAm(buf, len, hdSynced);
+    } else {
         // Build 6: Digital only - no analog audio, the clock correction's resampler stands
         // still. The dongle's clock keeps drifting from the station's all the same, and the
         // HD audio keeps being anchored on the time line: count the frames the resampler
@@ -1627,18 +1730,19 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_program = 0;                           // 9b: a new station starts on HD1
     // 9c: AM below 30 MHz (the AM band is 0.53-1.7 MHz; the V4's driver switches its
     // HF upconverter in by itself below 28.8 MHz; a V3 goes to direct sampling instead,
-    // see g_direct). AM = HD only: no analog demodulator,
-    // no aligner, no blend - whatever the "HD Radio" setting says (Kotlin sends
-    // Digital only for AM too; this is the safety net). The stream thread isn't running
-    // yet, so plain writes are fine here.
+    // see g_direct). Build 18: AM has its analog side too (amdemod.hpp) - the "HD Radio"
+    // setting works there as on FM (until build 17 AM was forced to Digital only here).
+    // The stream thread isn't running yet, so plain writes are fine here.
     g_mode = freqHz < AM_BELOW_HZ ? NRSC5_MODE_AM : NRSC5_MODE_FM;
-    if (g_mode == NRSC5_MODE_AM) g_audioSource = SOURCE_HD;
     clearAudio();                            // and any old audio
     g_fm.reset();                            // M11: analog demodulator starts fresh (no old station in its filters)
+    g_am.reset();                            // build 18: the AM one too
     g_fmCarrierDb = -99.0f;
     g_fmOffsetHz = 0.0f;
     g_fmQuietDb = -99.0f;                    // 9k
     g_fmPilot = 0; g_fmPilotLevel = 0.0f; g_fmStereo = 0.0f;   // 11b
+    g_amLocked = 0; g_amCarrierDb = -99.0f; g_amSnrDb = -99.0f; g_amOffsetHz = 0.0f;   // build 18
+    g_amPilot = 0; g_amPilotLevel = 0.0f; g_amStereo = 0.0f;
     {   // M12: no RDS of the old station; step 2: no "same station?" verdict either
         std::lock_guard<std::mutex> lock(g_rdsMutex);
         g_rds = rds::Status(); g_hdCall.clear(); g_sameCall.clear();
@@ -1654,6 +1758,23 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_fmLoad.reset();                        // 9i
     g_align.reset();                         // 11c: alignment starts fresh too
     g_blend.reset();                         // 11d: and the blend (analog first, HD when it's good)
+    // Build 18: on AM the HD audio is in step with the analog (not 2.5 s ahead as on FM), so
+    // the aligner looks around 0 first, and the blend plays ~3 s behind live for its look-ahead;
+    // the aligner compares envelopes there (its header says why) and is good to about a
+    // millisecond, so the blend and the clock tracker expect that scatter.
+    const bool amMode = g_mode == NRSC5_MODE_AM;
+    g_align.setEnvelopeMode(amMode);
+    if (amMode) g_align.setHint(0);
+    g_blend.setRestartLatency(amMode ? AM_BLEND_LATENCY_FRAMES : blend::RESTART_LATENCY);
+    g_blend.setOffsetTolerance(amMode ? blend::OFFSET_TOLERANCE_AM : blend::OFFSET_TOLERANCE);
+    g_drift.setPointSigma(amMode ? AM_ALIGN_SIGMA_FRAMES : 1.0);
+    // ... and the clock correction does not steer on AM (1.1): with measurements good to a
+    // millisecond it would take minutes to know the crystal's error to a few ppm, and a wrong
+    // slope moves the analog by frames per second (seen in the harness: -306 ppm after a sync
+    // loss). Without it a 1 ppm dongle (every RTL-SDR Blog model) drifts 0.04 frames a second:
+    // one re-alignment (a fade out and in) per ~40 minutes; a 60 ppm crystal one per ~40 s.
+    // (The harness's DRIFT=off switches it off everywhere; the app's test hook too.)
+    g_drift.setEnabled(!amMode && g_driftWanted);
     g_stretch.reset();                       // build 6: and the clock correction (the crystal's error is learnt anew)
     g_drift.reset();
     g_driftRate = 0; g_idleSlip = 0; g_slip = 0.0;
@@ -2061,7 +2182,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // clockScatter = how much more this station's measurements scatter than usual (1 = as usual).
     {
         drift::Status d = g_drift.status();
-        bool on = g_mode == NRSC5_MODE_FM && demodWanted();
+        bool on = demodWanted() && g_mode == NRSC5_MODE_FM;   // (AM: the correction does not steer - "off")
         snprintf(buf, sizeof(buf), "clockState=%s\nclockPpm=%.1f\nclockUsePpm=%.1f\nclockGuessPpm=%.1f\nclockPoints=%d\nclockErr=%.1f\n"
                  "clockUnused=%s\nclockUnusedPpm=%.1f\nclockScatter=%.1f\n",
                  !on || d.state == 0 ? "off" : d.state == 2 ? "measured" : "guess",
@@ -2111,6 +2232,20 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
         if (fm && id.ownPi >= 0) snprintf(own, sizeof(own), "%04X", id.ownPi);
         out += std::string("hdOwnPi=") + own + "\n";
         out += "hdContest=" + std::to_string(fm ? g_contest.load() : 0) + "\n";
+    }
+    // Build 18: analog AM (amdemod.hpp; all -99 / 0 on FM or while the demodulator is off).
+    // amLocked = a carrier is there and held; amCarrierDb = its level (dB re full scale);
+    // amSnrDb = carrier-to-noise in 5 kHz (the AM S-meter; -99 = not yet); amOffsetHz = the
+    // carrier's distance from the tuned frequency; amPilot / amPilotPct = a C-QUAM stereo
+    // pilot and its level in % of 100 % modulation (nominal 4); amStereoPct = the C-QUAM
+    // stereo playing (0 = mono); amBandwidth = the audio low-pass (Hz).
+    {
+        const bool amOn = g_mode == NRSC5_MODE_AM && demodWanted();
+        snprintf(buf, sizeof(buf), "amLocked=%d\namCarrierDb=%.1f\namSnrDb=%.1f\namOffsetHz=%.1f\namPilot=%d\namPilotPct=%.1f\namStereoPct=%d\namBandwidth=%d\n",
+                 amOn ? g_amLocked.load() : 0, amOn ? g_amCarrierDb.load() : -99.0f, amOn ? g_amSnrDb.load() : -99.0f,
+                 amOn ? g_amOffsetHz.load() : 0.0f, amOn ? g_amPilot.load() : 0, amOn ? g_amPilotLevel.load() * 100.0f : 0.0f,
+                 amOn ? (int)std::lround(g_amStereo.load() * 100.0f) : 0, g_amBandwidthHz.load());
+        out += buf;
     }
     out += std::string("hdOn=") + (g_hdOn.load() ? "1" : "0") + "\n";   // 12a step 3: off in Analog only
     {   // Build 9: the HD search on a station without HD (hdsearch.hpp): on / rest / look,
@@ -2309,7 +2444,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getAudioBufferedNative(JNIEnv*, 
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setAudioSourceNative(JNIEnv*, jobject, jint source) {
     int wanted = source == SOURCE_ANALOG ? SOURCE_ANALOG : source == SOURCE_AUTO ? SOURCE_AUTO : SOURCE_HD;
-    if (g_streaming && g_mode == NRSC5_MODE_AM) wanted = SOURCE_HD;   // 9c: AM is HD only
+    // (9c forced SOURCE_HD on AM here; since build 18 AM has an analog side, so the setting rules.)
     int before = g_audioSource.load();
     if (before == wanted) return;
     if (before == SOURCE_HD && g_streaming) {
@@ -2333,6 +2468,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_setAudioSourceNative(JNIEnv*, jo
         g_fmCarrierDb = -99.0f;                          // "measuring" until the first block
         g_fmQuietDb = -99.0f;                            // 9k
         g_fmPilot = 0; g_fmPilotLevel = 0.0f; g_fmStereo = 0.0f;   // 11b
+        g_amLocked = 0; g_amCarrierDb = -99.0f; g_amSnrDb = -99.0f; g_amPilot = 0; g_amStereo = 0.0f;   // build 18
     }
     LOGI("Audio source: %s", wanted == SOURCE_ANALOG ? "analog" : wanted == SOURCE_AUTO ? "auto (blend)" : "HD");
 }
@@ -2364,6 +2500,17 @@ extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setDeemphasisNative(JNIEnv*, jobject, jint us) {
     int v = us == 50 ? 50 : 75;
     if (g_deemphUs.exchange(v) != v) LOGI("FM de-emphasis: %d us", v);
+}
+
+// Kotlin (RadioEngine): external fun setAmBandwidthNative(hz: Int)
+// Build 18: the analog AM audio bandwidth, 2,000 .. 10,000 Hz (default 5,000 = what a hybrid HD
+// station's analog carries, and what most AM radios pass; wider for a non-HD station with wide
+// audio, at the price of hearing more of the neighbours). Works live: the demodulator picks it
+// up at its next block. Any thread. (Kotlin need not declare it until there is a setting.)
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_setAmBandwidthNative(JNIEnv*, jobject, jint hz) {
+    int v = std::max(am::MIN_BANDWIDTH_HZ, std::min(am::MAX_BANDWIDTH_HZ, (int)hz));
+    if (g_amBandwidthHz.exchange(v) != v) LOGI("AM audio bandwidth: %d Hz", v);
 }
 
 // Kotlin (RadioEngine): external fun setChannelCallsNative(calls: String, known: Boolean)
@@ -2418,14 +2565,16 @@ Java_io_github_derek20la_hidefradio_RadioEngine_setHdOwnerNative(JNIEnv *env, jo
 // Returns 0 = nothing measured this time, 1 = a result was accepted, 2 = no match.
 extern "C" JNIEXPORT jint JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, jobject) {
-    if (!g_streaming || g_mode != NRSC5_MODE_FM || !demodWanted()) return 0;   // 11d: off in Digital only
+    if (!g_streaming || !demodWanted()) return 0;   // 11d: off in Digital only (build 18: AM too)
     align::Result r;
     if (!g_align.measure(r)) return 0;
-    {   // Build 10: every attempt, accepted or not, is evidence for "is this the HD's own analog?"
-        std::lock_guard<std::mutex> lock(g_rdsMutex);
-        g_ident.onAlign(r.accepted, r.corr, r.hdCover, (double)g_iqPos.load() / SAMPLE_RATE);
+    if (g_mode == NRSC5_MODE_FM) {   // Build 10: every attempt, accepted or not, is evidence for "is this the HD's own analog?"
+        {
+            std::lock_guard<std::mutex> lock(g_rdsMutex);
+            g_ident.onAlign(r.accepted, r.corr, r.hdCover, (double)g_iqPos.load() / SAMPLE_RATE);
+        }
+        applyIdentity();
     }
-    applyIdentity();
     if (r.accepted) {
         // Build 6: every accepted measurement also tells the clock correction how the analog
         // moves against the HD (drift.hpp).
@@ -2498,7 +2647,8 @@ Java_io_github_derek20la_hidefradio_RadioEngine_isSpeedTestBusyNative(JNIEnv*, j
 // demodulator, as in every build before 6.
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setClockCorrectionNative(JNIEnv*, jobject, jboolean on) {
-    g_drift.setEnabled(on == JNI_TRUE);
+    g_driftWanted = on == JNI_TRUE;
+    g_drift.setEnabled(g_driftWanted && g_mode != NRSC5_MODE_AM);
     LOGI("Clock correction: %s", on == JNI_TRUE ? "on" : "OFF (test)");
 }
 

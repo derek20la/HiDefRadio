@@ -284,6 +284,14 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         enabled_ = on;
     }
+    // How much one good measurement scatters (frames, 1 sigma): FM 1 (POINT_SIGMA); AM 60 -
+    // the aligner lines up envelopes there, good to about a millisecond (aligner.hpp), and
+    // the tracker must know that or it would take every AM measurement for a station that
+    // "scatters" and never let the audio speak. Not cleared by reset(); set per tune.
+    void setPointSigma(double frames) {
+        std::lock_guard<std::mutex> lock(m_);
+        pointSigma_ = std::max(0.1, frames);
+    }
 
     // Streaming thread, once per block, AFTER the block's audio went through the Stretch:
     //   frame       the time line position (the aligner's frame count) of the next analog frame
@@ -350,7 +358,7 @@ public:
         // Undo our own correction: the offset the aligner WOULD have seen without the Stretch.
         Point p;
         p.c = at; p.y = offset + slipAt(at);
-        p.sigma = POINT_SIGMA + POINT_SIGMA_R * (1.0 - std::min(1.f, std::max(0.f, corr)));
+        p.sigma = pointSigma_ + POINT_SIGMA_R * (1.0 - std::min(1.f, std::max(0.f, corr)));
         bool stepped = false; double step = 0;
         if (good_ && pts_.size() >= (size_t)SETTLED_POINTS) {
             // The line is well known by now (good_: it is the audio's own line, and a tight one -
@@ -578,6 +586,7 @@ private:
     bool leaning_ = false;                           // the slope is the expectation's: the audio has no say on it (yet)
     double audio_ = 0; bool haveAudio_ = false;      // what the audio alone says (for the status), once it has a line of its own
     double scatter_ = 1;                             // how much more the measurements scatter than assumed (1 = as assumed)
+    double pointSigma_ = POINT_SIGMA;                // setPointSigma: FM 1, AM 60 frames
     int against_ = 0; bool overruled_ = false;       // the audio's strong case against the tuning error: fits running / won
     double kept_ = 0; bool haveKept_ = false;        // the slope we measured, kept across restarts ...
     bool useKept_ = false; double keptThen_ = 0;     // ... and whether THIS run of points started with it (and its value then)
