@@ -73,6 +73,13 @@
             app:selectable="false"
             app:summary="@string/setting_am_bandwidth_help" />
 
+        <!-- Build 21: NRSC-1 de-emphasis on analog AM (RadioEngine.setAmDeemphasisNative). -->
+        <SwitchPreferenceCompat
+            app:defaultValue="true"
+            app:key="am_deemph"
+            app:title="@string/setting_am_deemph"
+            app:summary="@string/setting_am_deemph_help" />
+
         <ListPreference
             app:defaultValue="americas"
             app:entries="@array/band_names"

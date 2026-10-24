@@ -21,6 +21,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.text.InputFilter
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.text.TextPaint
 import android.util.Log
 import android.util.TypedValue
@@ -155,6 +158,8 @@ class MainActivity : AppCompatActivity() {
 
     // M10c step 3: "synced but decoding badly" (amber dot + "weak").
     private var lastCrcErrors = 0L          // the program's CRC error count last second
+    private var stereoLit = false           // build 21: the VFD stereo dot as last shown (kept through a crossfade)
+    private var vfdLights = -1              // build 21: what showVfdLights() last drew (-1 = nothing yet)
     private var crcErrorAtMs = -1L          // when it last went up (-1 = not on this station)
     private var debugOpen = false
     // 9d step 4: the station's call sign (e.g. "KRTH"), so a program name that
@@ -223,6 +228,7 @@ class MainActivity : AppCompatActivity() {
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        showVfdLights(hd = false, stereo = false)   // build 21: "● HD" from the start, so fitVfd() measures the real width
         Settings.styleSystemBars(this)                   // 9h
         keepClearOfSystemBars()
         hintColors = binding.statusHint.textColors      // 9h
@@ -781,8 +787,8 @@ class MainActivity : AppCompatActivity() {
     /** The signal line (always) and the details (when opened). */
     private fun updateSignal(running: Boolean, s: Signal) {
         val weak = if (running) weakReason(s) else null          // M10c step 3
-        // The VFD's little "HD" lights up while synced.
-        binding.vfdHd.setTextColor(color(if (s.synced) R.color.vfd_on else R.color.vfd_ghost))
+        // The VFD's little "HD" lights up while synced; build 21: and the stereo dot beside it.
+        showVfdLights(hd = s.synced, stereo = stereoHeard(running, s))
 
         val (dotColor, text) = when {
             !running -> R.color.signal_off to getString(R.string.signal_off)
@@ -839,6 +845,48 @@ class MainActivity : AppCompatActivity() {
         binding.signalArrow.text = if (open) "▴" else "▾"
         binding.signalTable.visibility = if (open) View.VISIBLE else View.GONE
         if (open) showDetails(signalDetails(running, s, weak))
+    }
+
+    /**
+     * Build 21: the VFD's stereo dot - a glowing "●" before the little "HD", lit while what you
+     * HEAR is stereo. Derek's idea (10-17), after the radios of the early 70s: GM's car radios
+     * from 1972 had "an illuminated orange dot in the dial" for FM stereo (before that the word
+     * STEREO lit up), and home receivers a small STEREO lamp - lit by the station's 19 kHz pilot.
+     *   - analog FM: stereo playing (fmStereoPct >= 50, the same rule as "ST" on the signal line;
+     *     "Always mono" or a signal blended down to mono = off);
+     *   - analog AM: C-QUAM stereo playing (amStereoPct >= 50);
+     *   - HD (Digital only, Auto on the HD, a sub-channel, the HD alone): the program is stereo -
+     *     its left and right differ (hdStereo, worked out in the engine; a mono HD stream comes out
+     *     of the codec with two identical channels) - and the HD is in sync (no dot over silence);
+     *   - during a 0.5 s crossfade: unchanged, so the dot doesn't flicker when the blend moves.
+     * So a stereo station keeps its dot when Auto goes from the analog to the HD and back.
+     */
+    private fun stereoHeard(running: Boolean, s: Signal): Boolean {
+        stereoLit = when {
+            !running -> false
+            s.auto && (s.blendState == "toHd" || s.blendState == "toAnalog") -> stereoLit
+            s.analog -> if (s.am) s.amStereoPct >= 50 else s.fmStereoPct >= 50
+            else -> s.synced && s.hdStereo
+        }
+        return stereoLit
+    }
+
+    /**
+     * Build 21: the small VFD line "● HD" - the stereo dot and "HD", each lit (vfd_on) or unlit
+     * (vfd_ghost, just visible, like a real VFD's dark segments). One TextView with two colours,
+     * so the layout and fitVfd()'s measuring stay as they were.
+     */
+    private fun showVfdLights(hd: Boolean, stereo: Boolean) {
+        val state = (if (hd) 1 else 0) + (if (stereo) 2 else 0)
+        if (state == vfdLights) return                          // unchanged: no new text, no re-layout
+        vfdLights = state
+        val dot = getString(R.string.vfd_stereo_dot)
+        val text = SpannableString("$dot ${getString(R.string.vfd_hd)}")
+        text.setSpan(ForegroundColorSpan(color(if (stereo) R.color.vfd_on else R.color.vfd_ghost)),
+                     0, dot.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(ForegroundColorSpan(color(if (hd) R.color.vfd_on else R.color.vfd_ghost)),
+                     dot.length + 1, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        binding.vfdHd.text = text
     }
 
     /**
@@ -1148,7 +1196,8 @@ class MainActivity : AppCompatActivity() {
             s.amStereoPct == 0 -> f("mono (blended - noisy), pilot %.1f %%", s.amPilotPct)
             else -> f("C-QUAM stereo %d %%, pilot %.1f %%", s.amStereoPct, s.amPilotPct)
         }
-        val bw = f(", audio %.0f kHz", s.amBandwidth / 1000f)
+        val bw = f(", audio %.0f kHz", s.amBandwidth / 1000f) +
+                 if (s.amDeemph) ", NRSC de-emphasis" else ", flat (no de-emphasis)"   // build 21
         return listOf("Analog" to "$first\n$stereo$bw\n" +
                                   "demod ${s.fmLoadPct} % CPU, HD decode " +
                                   when {

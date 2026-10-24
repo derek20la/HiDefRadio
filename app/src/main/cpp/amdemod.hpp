@@ -72,6 +72,10 @@
 //       hybrid HD mode sends, and what most radios pass; the HD's secondary sidebands start
 //       at 5 kHz), settable (setBandwidth) up to 10 kHz for a non-HD station with wide audio.
 //       Two channels (L+R and L-R) go through the same filter in lock-step, as on FM.
+//   de-emphasis (setDeemphasis, build 21): the receiver half of NRSC-1. US AM stations boost
+//       their treble before transmission ("modified 75 us": +6.9 dB at 5 kHz, +10 dB at
+//       10 kHz) and the standard asks receivers to take it out again; without it AM sounds
+//       bright and hissy, and unlike the HD audio, which is not pre-emphasized. See "NRSC-1".
 //
 // C-QUAM (Motorola's "compatible quadrature AM", the AM stereo system the FCC chose in 1993):
 //   The station sends (1 + L + R) x cos(wt + phi) with phi = atan((L - R) / (1 + L + R)), plus a
@@ -122,6 +126,23 @@ static constexpr int    RESAMPLE_L = 4, RESAMPLE_M = 5; // 55,125 x 4 / 5 = 44,1
 static constexpr double CH_PASS_HZ = 12000.0;        // kept flat around the carrier (an AM channel is 10 kHz)
 static const int DEFAULT_BANDWIDTH_HZ = 5000;        // audio low-pass (setBandwidth): 5 kHz = hybrid HD's analog
 static const int MIN_BANDWIDTH_HZ = 2000, MAX_BANDWIDTH_HZ = 10000;
+
+// ---- NRSC-1 de-emphasis (build 21; setDeemphasis) ----
+// NRSC-1-A (the NRSC's AM preemphasis / deemphasis standard), section 6 / Table 2: the receiver
+// "shall complement the recommended transmission preemphasis": one POLE at 2122 Hz (75 us) and
+// one ZERO at 8700 Hz (~18.3 us), unity at low frequencies:
+//       H(f) = (1 + j f / 8700) / (1 + j f / 2122)       -> -6.92 dB at 5 kHz, -10.00 dB at 10 kHz
+// At 44,100 S/s that is a one-pole / one-zero filter,  y[n] = g (x[n] - q x[n-1]) + p y[n-1],
+// g = (1 - p) / (1 - q) for unity at DC. Why not the textbook bilinear transform? With 8.7 kHz
+// so close to a quarter of the sample rate it bends the curve: 0.46 dB too much cut at 5 kHz,
+// 1.3 dB at 10 kHz. So p and q were FITTED (least squares) to the standard's own curve between
+// 50 Hz and 10 kHz: the result is within 0.01 dB of Table 2 everywhere in that range
+// (100 Hz -0.009, 1 kHz -0.81, 2122 Hz -2.76, 5 kHz -6.93, 10 kHz -9.99 dB). p is almost the
+// "matched" exp(-2 pi 2122 / 44100) = 0.7392, q a little below exp(-2 pi 8700 / 44100) = 0.2896.
+// Above 10 kHz nothing is left anyway (the audio low-pass stops at the bandwidth + 1.5 kHz).
+static constexpr float DEEMPH_P = 0.738747605f;     // the pole  (2122 Hz)
+static constexpr float DEEMPH_Q = 0.285136516f;     // the zero  (8700 Hz)
+static constexpr float DEEMPH_G = (1.0f - DEEMPH_P) / (1.0f - DEEMPH_Q);   // unity gain at DC
 
 // ---- the stereo setting (setStereoMode) - the same numbers as fm:: so one setting serves both ----
 static const int STEREO_AUTO = 0;                // C-QUAM stereo when a pilot is there, blended to mono when noisy
@@ -306,6 +327,7 @@ public:
         attackStep = (float)(1.0 / (BLEND_ATTACK_S * AUDIO_RATE));
         releaseStep = (float)(1.0 / (BLEND_RELEASE_S * AUDIO_RATE));
         fastUntil = (long long)(BLEND_FAST_UNTIL_S * AUDIO_RATE);
+        resetDeemphasis();
         audioOut.clear();
     }
     // STEREO_AUTO (default), STEREO_MONO or STEREO_FULL. Between blocks (streaming thread).
@@ -323,6 +345,16 @@ public:
         initAudio();
     }
     int bandwidth() const { return bandwidthHz; }
+    // Build 21: NRSC-1 de-emphasis on (the app's default - Settings -> "AM de-emphasis") or off
+    // (flat audio, as the station sends it). Survives reset(), like the bandwidth. Switching it
+    // on starts the filter from rest (no click: the detector's audio has no DC in it).
+    // Between blocks (streaming thread). Off = the output is exactly what it was before build 21.
+    void setDeemphasis(bool on) {
+        if (on == deemph) return;
+        deemph = on;
+        resetDeemphasis();
+    }
+    bool deemphasis() const { return deemph; }
 
     // Feed cu8 bytes (I,Q,I,Q,...). Audio appears in audioOut (append-only; caller clears).
     void processCu8(const uint8_t *buf, size_t len) {
@@ -405,6 +437,12 @@ public:
                 if (stereoTarget < stereo) stereo = std::max(stereoTarget, stereo - attackStep);
                 else if (stereoTarget > stereo) stereo = framesOut < fastUntil ? stereoTarget : std::min(stereoTarget, stereo + releaseStep);
                 float l = mm + stereo * dd, r = mm - stereo * dd;          // L = (L+R) + (L-R), R = (L+R) - (L-R): see the header
+                if (deemph) {                                              // build 21: NRSC-1 (see DEEMPH_P), per channel
+                    const float yl = DEEMPH_G * (l - DEEMPH_Q * deXl) + DEEMPH_P * deYl;
+                    const float yr = DEEMPH_G * (r - DEEMPH_Q * deXr) + DEEMPH_P * deYr;
+                    deXl = l; deYl = yl; deXr = r; deYr = yr;
+                    l = yl; r = yr;
+                }
                 if (l > OUT_MAX) l = OUT_MAX; else if (l < -OUT_MAX) l = -OUT_MAX;   // (the filter can overshoot a clamped input)
                 if (r > OUT_MAX) r = OUT_MAX; else if (r < -OUT_MAX) r = -OUT_MAX;
                 audioOut.push_back(l);
@@ -431,6 +469,7 @@ public:
     }
 private:
     static const int TABLE = 4096, SHIFT = 32 - 12;
+    void resetDeemphasis() { deXl = deYl = deXr = deYr = 0; }
     void initAudio() {
         // pass bandwidth, stop 1.5 kHz above it (10 kHz: stop 11.5 - still inside the 12 kHz channel)
         audio.init(CH_RATE, RESAMPLE_L, RESAMPLE_M, bandwidthHz, bandwidthHz + 1500, 60);
@@ -477,6 +516,7 @@ private:
     int mode = STEREO_AUTO; bool hdSynced = false; int bandwidthHz = DEFAULT_BANDWIDTH_HZ;
     float stereo = 0, stereoTarget = 0, attackStep = 0, releaseStep = 0; long long framesOut = 0, fastUntil = 0;
     float dcI = 0, dcQ = 0, dcAlpha = 0, dcAlphaSlow = 0, dcDecay = 0;
+    bool deemph = false; float deXl = 0, deYl = 0, deXr = 0, deYr = 0;   // build 21: NRSC-1 de-emphasis and its state
 };
 
 } // namespace am

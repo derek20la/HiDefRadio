@@ -23,6 +23,10 @@
 //   6. the same C-QUAM signal with hdSynced = true: mono (no stereo decode), pilot "off"
 //   7. C-QUAM with the noise of a 28 dB C/N: the blend goes toward mono
 //   8. no carrier (noise alone): not locked, the output does not explode (|out| <= 1)
+//   9. build 21, NRSC-1 de-emphasis: tones 100 Hz .. 9.5 kHz with the 10 kHz bandwidth, the
+//      level with de-emphasis on against off = the standard's receiver curve (Table 2 of
+//      NRSC-1-A: -6.92 dB at 5 kHz, -10.00 dB at 10 kHz) within 0.1 dB; off = bit for bit a
+//      demodulator that was never switched; C-QUAM's separation is kept with it on
 #include "amdemod.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -120,6 +124,7 @@ int main(int argc, char **argv) {
         double secs = argc > 3 ? atof(argv[3]) : 1e9;
         am::Demod d;
         if (argc > 4) d.setBandwidth(atoi(argv[4]));
+        if (argc > 5) d.setDeemphasis(strcmp(argv[5], "on") == 0);     // build 21: ... [bw] [on|off]
         std::vector<uint8_t> buf(262144); std::vector<float> out; double t = 0, nextPrint = 1;
         size_t n;
         while ((n = fread(buf.data(), 1, buf.size(), f)) > 0 && t < secs) {
@@ -241,6 +246,39 @@ int main(int argc, char **argv) {
         printf("   locked %d  pilot %d  peak |out| %.3f  meter %.1f\n", d.locked(), d.pilot(), peak, d.snrDb());
         check(!d.locked() && !d.pilot(), "not locked, no pilot");
         check(peak <= 2.0f, "output stays bounded (<= 2.0; the app clamps at 1.0 after its 0.5 gain)");
+    }
+    // 9. build 21: NRSC-1 de-emphasis
+    printf("9. NRSC-1 de-emphasis (bandwidth 10 kHz)\n");
+    {
+        auto nrsc = [](double f) {                         // the receiver curve, NRSC-1-A Table 2
+            return 10 * std::log10(1 + (f / 8700) * (f / 8700)) - 10 * std::log10(1 + (f / 2122) * (f / 2122)); };
+        double worst = 0;
+        for (double f : {100.0, 1000.0, 2122.0, 3000.0, 5000.0, 7000.0, 8700.0, 9500.0}) {
+            g.make(3.0, 300.0, 0.1, 0.0, 0.0, [f](double t, float &i, float &q) { i = (float)(1 + 0.3 * std::sin(2 * M_PI * f * t)); q = 0; });
+            am::Demod off, on; off.setBandwidth(10000); on.setBandwidth(10000); on.setDeemphasis(true);
+            std::vector<float> a = run(off, g.bytes), b = run(on, g.bytes);
+            double got = db(toneRms(b, 0, 1.5, 3, f) / toneRms(a, 0, 1.5, 3, f)), want = nrsc(f);
+            worst = std::max(worst, std::fabs(got - want));
+            printf("   %6.0f Hz  on/off %+7.2f dB  NRSC-1 %+7.2f dB\n", f, got, want);
+        }
+        check(worst < 0.1, "de-emphasis follows NRSC-1 Table 2 within 0.1 dB, 100 Hz .. 9.5 kHz");
+        // off = untouched: a demodulator switched on and off again against one never switched
+        g.make(3.0, 300.0, 0.1, 0.002, 0.0, [](double t, float &i, float &q) { i = (float)(1 + 0.4 * std::sin(2 * M_PI * 3000 * t)); q = 0; });
+        am::Demod plain, flipped; flipped.setDeemphasis(true); flipped.setDeemphasis(false);
+        std::vector<float> a = run(plain, g.bytes), b = run(flipped, g.bytes);
+        check(a == b, "de-emphasis off = bit for bit the output without it");
+        // C-QUAM (test 5's signal and window): a tone on the left stays on the left - the filter
+        // is the same on both channels, so the separation must not change
+        g.make(8.0, 300.0, 0.1, 0.0, 0.0, [](double t, float &i, float &q) {
+            double L = 0.4 * std::sin(2 * M_PI * 1000 * t), pilot = 0.04 * std::sin(2 * M_PI * 25 * t);
+            double phi = std::atan2(L + pilot, 1 + L);
+            i = (float)((1 + L) * std::cos(phi)); q = (float)((1 + L) * std::sin(phi)); });
+        am::Demod st0, st; st.setDeemphasis(true);
+        std::vector<float> c0 = run(st0, g.bytes), c = run(st, g.bytes);
+        const double sep0 = db(toneRms(c0, 0, 6, 8, 1000) / toneRms(c0, 1, 6, 8, 1000));
+        const double sep = db(toneRms(c, 0, 6, 8, 1000) / toneRms(c, 1, 6, 8, 1000));
+        printf("   C-QUAM left-only: separation %.1f dB off, %.1f dB on\n", sep0, sep);
+        check(sep >= 25 && std::fabs(sep - sep0) < 0.5, "C-QUAM separation kept with de-emphasis on (>= 25 dB, within 0.5 dB of off)");
     }
     printf("%d failure(s)\n", failures);
     return failures;

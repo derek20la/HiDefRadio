@@ -158,6 +158,13 @@ object RadioEngine {
     external fun setAmBandwidthNative(hz: Int)
 
     /**
+     * Build 21: NRSC-1 de-emphasis on analog AM - on (the default) takes out the treble boost US
+     * AM stations add before transmission, off plays the audio flat. From Settings ->
+     * AM de-emphasis. Works live. Any thread. HD audio is never touched.
+     */
+    external fun setAmDeemphasisNative(on: Boolean)
+
+    /**
      * 13b: the call letters licensed on the frequency about to be tuned, from the
      * built-in FCC list (Stations.callsOn): "KHYL KWYE KRTH", separated by spaces.
      * [known] = false: there is no list for this frequency (AM, another region,

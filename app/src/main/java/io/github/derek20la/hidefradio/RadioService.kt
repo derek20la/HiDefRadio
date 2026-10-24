@@ -293,6 +293,7 @@ class RadioService : Service() {
         RadioEngine.setStereoModeNative(Settings.stereoMode(this))             // 11b step 2
         RadioEngine.setDeemphasisNative(Settings.deemphasisUs(this))           // 11b step 2: 75 / 50 us by region
         RadioEngine.setAmBandwidthNative(Settings.amBandwidthHz(this))         // build 19: analog AM
+        RadioEngine.setAmDeemphasisNative(Settings.amDeemphasis(this))         // build 21: NRSC-1 de-emphasis
         // 13b: who is licensed on this frequency (the built-in FCC list) - FM in the
         // Americas region only; elsewhere the native code works without the list.
         val calls = if (!FmBand.isAm(hz) && Settings.band(this) == FmBand.AMERICAS) Stations.callsOn(this, hz) else null
@@ -412,6 +413,10 @@ class RadioService : Service() {
             Settings.KEY_AM_BANDWIDTH -> if (connection != null) {     // build 19: live, like the stereo setting
                 val hz = Settings.amBandwidthHz(this)
                 engine.execute { RadioEngine.setAmBandwidthNative(hz) }
+            }
+            Settings.KEY_AM_DEEMPH -> if (connection != null) {        // build 21: live; an unchanged value is harmless
+                val on = Settings.amDeemphasis(this)
+                engine.execute { RadioEngine.setAmDeemphasisNative(on) }
             }
             Settings.KEY_BAND -> if (connection != null) {
                 val us = Settings.deemphasisUs(this)

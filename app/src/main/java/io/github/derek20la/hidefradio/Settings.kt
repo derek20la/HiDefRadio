@@ -29,6 +29,7 @@ object Settings {
                                             // (build 19: serves FM stereo AND C-QUAM AM stereo; the key keeps its old name
                                             // so a choice made before 1.1 is kept)
     const val KEY_AM_BANDWIDTH = "am_bandwidth"   // build 19: analog AM audio bandwidth in Hz as text ("5000")
+    const val KEY_AM_DEEMPH = "am_deemph"         // build 21: NRSC-1 de-emphasis on analog AM (a switch, on by default)
 
     // 11b step 2: analog FM stereo (build 19: and C-QUAM AM stereo - one setting for both).
     // The numbers are what RadioEngine.setStereoModeNative() takes.
@@ -138,6 +139,12 @@ object Settings {
      */
     fun amBandwidthHz(context: Context): Int =
         prefs(context).getString(KEY_AM_BANDWIDTH, "5000")?.toIntOrNull() ?: 5000
+
+    /**
+     * Build 21: NRSC-1 de-emphasis on analog AM, for RadioEngine.setAmDeemphasisNative(). On (the
+     * default, as in res/xml/settings.xml) = like an NRSC ("AMAX") AM radio; off = flat audio.
+     */
+    fun amDeemphasis(context: Context): Boolean = prefs(context).getBoolean(KEY_AM_DEEMPH, true)
 
     /** 11d: play an HD signal that doesn't match the analog? (for RadioEngine.setBlendUnmatchedNative) */
     fun unmatchedPlaysHd(context: Context): Boolean =

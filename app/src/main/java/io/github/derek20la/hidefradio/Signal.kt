@@ -129,8 +129,10 @@ data class Signal(
     val amPilotPct: Float,    // its level, % of 100 % modulation (nominal 4)
     val amStereoPct: Int,     // C-QUAM stereo playing right now (100 = full, 0 = mono)
     val amBandwidth: Int,     // the audio low-pass, Hz (the setting; 5000 by default)
+    val amDeemph: Boolean,    // build 21: NRSC-1 de-emphasis on (the setting; on by default)
     // 12a step 3: the HD decoder runs (off in Analog only - nrsc5 gets no samples then)
     val hdOn: Boolean,
+    val hdStereo: Boolean,    // build 21: the HD program being played is stereo (its left and right differ)
     // Build 9: the HD search on a station without HD (hdsearch.hpp, Auto only). After 30 s
     // without HD the search rests and only looks again for 3 s in every 30:
     //   "on"   = the decoder gets every sample (searching, or decoding the HD)
@@ -314,7 +316,9 @@ data class Signal(
                 amPilotPct = float("amPilotPct", 0f),
                 amStereoPct = long("amStereoPct", 0).toInt(),
                 amBandwidth = long("amBandwidth", 5000).toInt(),
+                amDeemph = long("amDeemph", 1) != 0L,                  // build 21
                 hdOn = bool("hdOn"),                                   // 12a step 3
+                hdStereo = bool("hdStereo"),                           // build 21
                 hdSearch = str("hdSearch").ifEmpty { "on" },           // build 9
                 hdLookIn = long("hdLookIn", 0).toInt(),
             )

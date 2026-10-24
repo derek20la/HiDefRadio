@@ -65,6 +65,8 @@ int main(int argc, char **argv) {
     // HDREST=off: the HD search never rests (hdsearch.hpp) - the engine as it was before build 9.
     if (getenv("HDREST") && strcmp(getenv("HDREST"), "off") == 0) J(setHdRestNative)(&env, nullptr, JNI_FALSE);
     // STEREO=mono / STEREO=stereo: the FM stereo setting (default Auto, as the app ships)
+    // build 21: NRSC-1 de-emphasis on analog AM - on unless AMDEEMPH=off (the app's default is on)
+    J(setAmDeemphasisNative)(&env, nullptr, getenv("AMDEEMPH") && strcmp(getenv("AMDEEMPH"), "off") == 0 ? JNI_FALSE : JNI_TRUE);
     J(setStereoModeNative)(&env, nullptr, getenv("STEREO") && strcmp(getenv("STEREO"), "mono") == 0 ? 1 : getenv("STEREO") && strcmp(getenv("STEREO"), "stereo") == 0 ? 2 : 0);
     // DRIFT=off: no clock correction (drift.hpp) - the engine as it was before build 6.
     if (getenv("DRIFT") && strcmp(getenv("DRIFT"), "off") == 0) J(setClockCorrectionNative)(&env, nullptr, JNI_FALSE);

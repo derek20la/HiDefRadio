@@ -253,8 +253,9 @@ gain is asked for), KRTH on a V3, and a dongle that fails to open.
 Build 18 gives the AM band its analog side (`amdemod.hpp`: synchronous detector, C-QUAM
 stereo) and lets the aligner and the blend work on AM. Three tools:
 
-    build/amtest                                   # amdemod.hpp alone on made-up signals: 30 checks, PASS / FAIL
-    build/amtest 1260-1.cu8 out.wav [secs] [bw]    # a recording: the meter once a second, the audio as a WAV
+    build/amtest                                   # amdemod.hpp alone on made-up signals: 33 checks, PASS / FAIL
+    build/amtest 1260-1.cu8 out.wav [secs] [bw] [on|off]   # a recording: the meter once a second, the audio as a WAV
+                                                   # (on|off = NRSC-1 de-emphasis, build 21; off when not given)
     build/amtest gen plain|cquam out.cu8 [secs]    # a made-up AM station as a .cu8 for apptest (no HD)
     IQFILE=1260-1.cu8 IQSTEP=1 UNMATCHED=hd WAVOUT=am.wav build/apptest 1260000 2 46   # the whole engine, AM in Auto
 
@@ -304,6 +305,24 @@ because the ring grew from 4 s to 8 s for AM's hold-back and that run's stale 0.
 
 Cost on the PC: the AM demodulator 8.7 ms of processor time per second of radio against the
 FM demodulator's 35 on the same machine (speed test, `SPEEDTEST=5`).
+
+### NRSC-1 de-emphasis (build 21): amtest check 9, `AMDEEMPH=off`
+
+`amdemod.hpp` takes out the treble boost US AM stations add (NRSC-1: +6.9 dB at 5 kHz, +10 dB
+at 10 kHz), as the standard asks of receivers - a one-pole / one-zero filter fitted to the
+standard's receiver curve (the bilinear transform was 0.5 dB off at 5 kHz). It is ON in the
+app by default (Settings -> AM de-emphasis) and in `apptest` unless `AMDEEMPH=off`; `amtest`'s
+own demodulator is flat unless told. amtest check 9: tones from 100 Hz to 9.5 kHz with it on
+against off follow NRSC-1 Table 2 within 0.01 dB (-0.81 dB at 1 kHz, -6.93 at 5 kHz, -9.82 at
+9.5 kHz); off is bit for bit the build 20 output; C-QUAM's separation is unchanged (39.5 dB).
+
+Results on 2026-10-24 (virtual time, Auto, "play the HD anyway"): with `AMDEEMPH=off` KMZT
+1260-3 (Auto and Analog only) and KBRT 740-2 are bit for bit build 20, and so is FM (KRTH Auto
+and Analog only, KKGO with sub-channels, KKGO Digital only). With it on, the analog matches the
+HD better (the HD audio is not pre-emphasized): KMZT r 0.77 / 0.83 / 0.74 -> 0.83 / 0.84 /
+0.71, analog +2.2 / +1.1 dB -> +0.7 / +0.3 dB against the HD; KBRT r 0.82 / 0.80 / 0.67 / 0.82
+-> 0.89 / 0.84 / 0.72 / 0.92, and on the HD at 25 s instead of 29 s. Same delays, one fade to
+the HD, none back.
 
 ## "Comments only": objcheck.sh
 

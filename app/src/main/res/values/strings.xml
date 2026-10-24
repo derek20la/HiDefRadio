@@ -17,8 +17,9 @@
     <string name="rename_reset">Station name</string>
 
     <!-- Milestone 9d: now-playing screen -->
-    <string name="vfd_description">Frequency display. Tap to type a frequency.</string>
+    <string name="vfd_description">Frequency display. Tap to type a frequency. A lit dot beside HD means stereo.</string>
     <string name="vfd_hd">HD</string>
+    <string name="vfd_stereo_dot" translatable="false">●</string>   <!-- build 21: the VFD's stereo dot (lit = stereo playing) -->
     <string name="enter_frequency">Tune to</string>
     <string name="enter_frequency_message">FM in MHz (e.g. 101.1) or AM in kHz (e.g. 1260)</string>
     <string name="show_debug">Show debug info</string>
@@ -100,6 +101,8 @@
     <string name="setting_fm_stereo_help">FM stereo and C-QUAM AM stereo. Auto blends to mono as the signal gets noisy, like a car radio (ST on the signal line = stereo). Always mono cuts the hiss of weak DX stations.</string>
     <string name="setting_am_bandwidth">AM audio bandwidth</string>   <!-- build 19 -->
     <string name="setting_am_bandwidth_help">How much of the AM audio is let through. 5 kHz suits most stations, and HD stations send no more on analog. Wider sounds fuller on a strong station without HD, but lets in more whistles from the stations next door.</string>
+    <string name="setting_am_deemph">AM de-emphasis (NRSC)</string>   <!-- build 21 -->
+    <string name="setting_am_deemph_help">Takes out the treble boost AM stations add before they transmit, like an AM radio built to the NRSC standard: less hiss, and closer to the HD sound when the blend moves. Turn it off for flat audio (some DXers like the extra treble on weak voices).</string>
     <string name="setting_hd_mismatch">If the HD signal is another station\'s</string>   <!-- 11d: Auto only -->
 
     <!-- Milestone 9f: About (bottom of the settings screen) -->

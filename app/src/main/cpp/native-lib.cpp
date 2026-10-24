@@ -87,7 +87,31 @@ struct ProgramInfo {
     int hdcPackets = 0;         // packets counted so far (0..31)
     float kbps = 0;             // latest result (0 = not measured yet)
     long long crcErrors = 0;    // damaged packets since the tune (each = a tiny dropout)
+    // Build 21: is this program STEREO? (for the VFD's stereo dot). The HD codec (FAAD2) turns a
+    // mono stream into two IDENTICAL channels (output.c, "upMatrix": the same sample written to
+    // left and right), so a program whose left and right differ is a stereo one. Counted per
+    // decoded frame (countStereoFrame); STEREO_FRAMES of them since the tune = a stereo
+    // program, and it stays so until the next tune - like an old radio's stereo lamp, which
+    // shows what the station sends, not whether this moment of talk happens to be centred.
+    int stereoFrames = 0;
 };
+
+// Build 21: the HD program counts as stereo after this many decoded frames (~23 ms each) whose
+// left and right differ. Three, so a single odd frame can't light the VFD's stereo dot.
+static const int STEREO_FRAMES = 3;
+
+// Build 21: does this decoded HD frame (16-bit stereo, interleaved) carry stereo? A mono program
+// comes out of FAAD2 with left == right exactly, and fixHdAudio() treats both channels the same,
+// so they stay equal. "Differs" = more than 1 % of the sample pairs apart by more than 8 LSB
+// (-72 dBFS) - far above rounding, far below any real stereo. Silence (zeros) is mono.
+static bool countStereoFrame(const int16_t *data, size_t count) {
+    size_t pairs = count / 2, apart = 0;
+    for (size_t i = 0; i + 1 < count; i += 2) {
+        int d = (int)data[i] - (int)data[i + 1];
+        if (d > 8 || d < -8) apart++;
+    }
+    return pairs > 0 && apart * 100 > pairs;
+}
 
 // 9d: a moment in time, for "how long since..." (steady = never jumps when
 // the phone's clock is changed).
@@ -333,6 +357,7 @@ static const float AM_OUTPUT_GAIN = 0.5f;
 static const long long AM_BLEND_LATENCY_FRAMES = 44100 * 3;
 static const double AM_ALIGN_SIGMA_FRAMES = 60.0;          // how much one AM alignment measurement scatters (drift.hpp)
 static std::atomic<int> g_amBandwidthHz{am::DEFAULT_BANDWIDTH_HZ};   // setAmBandwidthNative: the audio low-pass
+static std::atomic<bool> g_amDeemph{true};                 // build 21: setAmDeemphasisNative - NRSC-1 de-emphasis (on = the app's default)
 static std::atomic<int> g_amLocked{0};                     // a carrier is there and the PLL holds it
 static std::atomic<float> g_amCarrierDb{-99.0f};           // carrier amplitude, dB re full scale
 static std::atomic<float> g_amSnrDb{-99.0f};               // carrier-to-noise in 5 kHz (the AM S-meter)
@@ -779,6 +804,7 @@ static void demodAm(const unsigned char *buf, uint32_t len, bool hdSynced) {
     const double cpu0 = threadCpuMs();
     g_am.setStereoMode(g_stereoMode.load());         // one stereo setting serves FM and AM
     g_am.setBandwidth(g_amBandwidthHz.load());
+    g_am.setDeemphasis(g_amDeemph.load());           // build 21: NRSC-1 de-emphasis (the setting)
     g_am.setHdSynced(hdSynced);
     g_am.processCu8(buf, len);
     std::vector<float> &out = g_am.audioOut;
@@ -1094,6 +1120,10 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
                 if (st.audioMs < 0) st.audioMs = msSinceTune();   // 9d
                 pi.onAir = true;
                 pi.audioValues += (long long)evt->audio.count;
+                // Build 21: stereo or mono (the VFD's stereo dot) - see countStereoFrame().
+                if (pi.stereoFrames < STEREO_FRAMES && countStereoFrame(hdAudio, evt->audio.count))
+                    if (++pi.stereoFrames == STEREO_FRAMES)
+                        LOGI("%s is stereo", hdName(evt->audio.program).c_str());
                 // 11c: HD1's audio also goes to the aligner (analog is only ever
                 // compared with HD1 - the sub-channels have no analog twin).
                 if (evt->audio.program == 0) {
@@ -1388,6 +1418,7 @@ static void benchMain() {
             std::unique_ptr<am::Demod> d(new am::Demod());
             d->setStereoMode(g_stereoMode.load());
             d->setBandwidth(g_amBandwidthHz.load());
+            d->setDeemphasis(g_amDeemph.load());     // build 21 (a few multiplies a frame - nothing next to the rest)
             int blocks = 0, stereoBlocks = 0;
             const double c0 = threadCpuMs();
             for (size_t at = 0; at < total; at += block) {
@@ -2241,13 +2272,16 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // stereo playing (0 = mono); amBandwidth = the audio low-pass (Hz).
     {
         const bool amOn = g_mode == NRSC5_MODE_AM && demodWanted();
-        snprintf(buf, sizeof(buf), "amLocked=%d\namCarrierDb=%.1f\namSnrDb=%.1f\namOffsetHz=%.1f\namPilot=%d\namPilotPct=%.1f\namStereoPct=%d\namBandwidth=%d\n",
+        snprintf(buf, sizeof(buf), "amLocked=%d\namCarrierDb=%.1f\namSnrDb=%.1f\namOffsetHz=%.1f\namPilot=%d\namPilotPct=%.1f\namStereoPct=%d\namBandwidth=%d\namDeemph=%d\n",
                  amOn ? g_amLocked.load() : 0, amOn ? g_amCarrierDb.load() : -99.0f, amOn ? g_amSnrDb.load() : -99.0f,
                  amOn ? g_amOffsetHz.load() : 0.0f, amOn ? g_amPilot.load() : 0, amOn ? g_amPilotLevel.load() * 100.0f : 0.0f,
-                 amOn ? (int)std::lround(g_amStereo.load() * 100.0f) : 0, g_amBandwidthHz.load());
+                 amOn ? (int)std::lround(g_amStereo.load() * 100.0f) : 0, g_amBandwidthHz.load(), g_amDeemph.load() ? 1 : 0);
         out += buf;
     }
     out += std::string("hdOn=") + (g_hdOn.load() ? "1" : "0") + "\n";   // 12a step 3: off in Analog only
+    // Build 21: the HD program being played is stereo (left and right differ; kept until the
+    // next tune). For the VFD's stereo dot while the HD plays.
+    out += std::string("hdStereo=") + (sp.stereoFrames >= STEREO_FRAMES ? "1" : "0") + "\n";
     {   // Build 9: the HD search on a station without HD (hdsearch.hpp): on / rest / look,
         // and while it rests the seconds until the next look.
         int rest = g_hdRest.load();
@@ -2511,6 +2545,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setAmBandwidthNative(JNIEnv*, jobject, jint hz) {
     int v = std::max(am::MIN_BANDWIDTH_HZ, std::min(am::MAX_BANDWIDTH_HZ, (int)hz));
     if (g_amBandwidthHz.exchange(v) != v) LOGI("AM audio bandwidth: %d Hz", v);
+}
+
+// Kotlin (RadioEngine): external fun setAmDeemphasisNative(on: Boolean)
+// Build 21: NRSC-1 de-emphasis on analog AM (amdemod.hpp, DEEMPH_P): on (the default) takes out
+// the treble boost US AM stations add before transmission, as the standard asks of receivers;
+// off = flat, the station's audio as sent (some DXers like the extra treble for weak voices).
+// Works live: the demodulator picks it up at its next block. Any thread. The HD audio is
+// untouched either way (HD Radio's audio is not pre-emphasized).
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_setAmDeemphasisNative(JNIEnv*, jobject, jboolean on) {
+    const bool v = on == JNI_TRUE;
+    if (g_amDeemph.exchange(v) != v) LOGI("AM de-emphasis (NRSC-1): %s", v ? "on" : "off");
 }
 
 // Kotlin (RadioEngine): external fun setChannelCallsNative(calls: String, known: Boolean)
