@@ -6,7 +6,7 @@ An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with
 
 No root, no computer, no internet connection needed. Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
-> **Status: 1.0.** A closed test on Google Play is running, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.1.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
@@ -22,7 +22,7 @@ No root, no computer, no internet connection needed. Everything you hear and see
 - **Analog FM in stereo**, with a stereo-to-mono blend as the signal gets noisy.
 - **RDS / RBDS** on analog FM: call letters, program type, RadioText, and song title and artist where the station sends them.
 - **HD Radio on AM**. It needs a dongle that can tune AM, such as the RTL-SDR Blog V4.
-- **Analog AM** (version 1.1, on `main`, not yet in a release): a synchronous detector, which is what HD-ready AM radios use, with the same blend to HD as on FM, and **C-QUAM AM stereo** for the few dozen US stations that still send it. See [Known limits](#known-limits).
+- **Analog AM** (since 1.1): a synchronous detector, which is what HD-ready AM radios use, with the same blend to HD as on FM, and **C-QUAM AM stereo** for the few dozen US stations that still send it, with the NRSC de-emphasis an AM radio uses (a switch in Settings). See [Known limits](#known-limits).
 - Band plans for the Americas, Europe and most of the world, Japan and Brazil, each with the right FM de-emphasis (75 or 50 µs).
 
 ### The blend
@@ -193,7 +193,8 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 ## Plans
 
-- **1.1**: analog AM with the blend and C-QUAM AM stereo (built; on-air testing next), and an rtl_tcp network source.
+- **1.1** (done): analog AM with the blend and C-QUAM AM stereo, NRSC AM de-emphasis, a stereo dot on the frequency display, export / import of favorites.
+- **1.2**: an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses
