@@ -39,7 +39,7 @@ No root, no computer, no internet connection needed. Everything you hear and see
 ### For listening
 
 - A "now playing" screen with a glowing VFD-style frequency display, station name, program, title and artist, album art and station logos.
-- **Favorites** as a scrolling strip of logo tiles. Tap ☆ to save the current station and program, hold a tile and drag it to change the order, and long-press to rename or delete. Logos are cached, so the tiles show them before a station sends them again.
+- **Favorites** as a scrolling strip of logo tiles. Tap ☆ to save the current station and program, hold a tile and drag it to change the order, and long-press to rename or delete. Logos are cached, so the tiles show them before a station sends them again. Settings → Storage → **Export / Import favorites** saves the list (with your names) to a plain text file and loads it back - for a new phone, or to move between installs.
 - On a tablet the screen splits in two: the radio on the left, the signal details always open on the right.
 - Plays in the background with the screen off.
 - Media controls in the notification, on the lock screen, and from headsets, Bluetooth and car radios. ⏮ ⏭ jump between favorites. Pause keeps the tuner running, so playback resumes live right away. The radio stops by itself after a pause (5 minutes by default) and pauses when you unplug headphones.
@@ -72,7 +72,7 @@ The dongle is powered by the phone, and on a phone with one USB port you can't c
 
 ## Get the app
 
-There are two ways. Please pick one and stay with it: the Play version is signed with Google's key and the APK with the developer's own key, so Android treats them as two different apps. To move from one to the other you have to uninstall first, and your favorites are not carried over.
+There are two ways. Please pick one and stay with it: the Play version is signed with Google's key and the APK with the developer's own key, so Android treats them as two different apps. To move from one to the other you have to uninstall first; take your favorites along with Settings → Storage → Export favorites, and Import them after (from 1.1).
 
 ### Join the test on Google Play
 

@@ -110,6 +110,37 @@
     <string name="settings_storage">Storage</string>
     <string name="setting_clear">Clear saved data</string>
     <string name="setting_clear_summary">%1$d station logos (%2$s), tuner gain remembered for %3$d stations. Your favorites, names and settings are kept.</string>
+    <!-- Build 22: favorites to / from a file -->
+    <string name="setting_export">Export favorites</string>
+    <plurals name="setting_export_summary">
+        <item quantity="one">Save your favorite and its name to a file - to keep, or to bring to another phone or install.</item>
+        <item quantity="other">Save your %1$d favorites and their names to a file - to keep, or to bring to another phone or install.</item>
+    </plurals>
+    <string name="setting_import">Import favorites</string>
+    <string name="setting_import_summary">Load favorites from a file you exported. Logos come back by themselves the next time each station\'s HD is received.</string>
+    <string name="export_none">You have no favorites to export yet.</string>
+    <string name="export_failed">Couldn\'t save the file.</string>
+    <plurals name="export_done">
+        <item quantity="one">Saved %1$d favorite.</item>
+        <item quantity="other">Saved %1$d favorites.</item>
+    </plurals>
+    <string name="import_failed">Couldn\'t read that file.</string>
+    <string name="import_none">That file has no favorites in it.</string>
+    <string name="import_title">Import favorites</string>
+    <plurals name="import_message">
+        <item quantity="one">The file has %1$d favorite (%2$d new). Add the new ones to your %3$d, or replace your list with the file\'s?</item>
+        <item quantity="other">The file has %1$d favorites (%2$d new). Add the new ones to your %3$d, or replace your list with the file\'s?</item>
+    </plurals>
+    <string name="import_add">Add new ones</string>
+    <string name="import_replace">Replace my list</string>
+    <plurals name="import_done">
+        <item quantity="one">%1$d favorite added.</item>
+        <item quantity="other">%1$d favorites added.</item>
+    </plurals>
+    <plurals name="import_replaced">
+        <item quantity="one">Your list now has %1$d favorite.</item>
+        <item quantity="other">Your list now has %1$d favorites.</item>
+    </plurals>
     <string name="clear_logos">Station logos: %1$d (%2$s)</string>
     <string name="clear_gains">Remembered tuner gains: %1$d</string>
     <string name="clear_button">Clear</string>

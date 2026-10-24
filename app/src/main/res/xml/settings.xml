@@ -142,6 +142,16 @@
          shows the "what to clear" dialog. Presets and names are never touched. -->
     <PreferenceCategory app:title="@string/settings_storage">
 
+        <!-- Build 22: favorites to / from a file (SettingsActivity: the system's file pickers). -->
+        <Preference
+            app:key="export_favorites"
+            app:title="@string/setting_export" />
+
+        <Preference
+            app:key="import_favorites"
+            app:title="@string/setting_import"
+            app:summary="@string/setting_import_summary" />
+
         <Preference
             app:key="clear_data"
             app:title="@string/setting_clear" />

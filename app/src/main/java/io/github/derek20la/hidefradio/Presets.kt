@@ -25,6 +25,17 @@ object Presets {
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /** Build 22: puts a whole list in place of yours (Import favorites -> "Replace my list"). */
+    fun replaceAll(context: Context, list: List<Preset>) = store(context, list)
+
+    /** Build 22: adds the favorites you don't have yet; returns how many were added. */
+    fun addNew(context: Context, list: List<Preset>): Int {
+        val current = load(context)
+        val merged = Preset.merge(current, list)
+        if (merged.size != current.size) store(context, merged)
+        return merged.size - current.size
+    }
+
     /** Where [freqHz] + [program] is in the list, or -1 if it isn't a preset. */
     fun indexOf(context: Context, freqHz: Int, program: Int): Int =
         load(context).indexOfFirst { it.matches(freqHz, program) }

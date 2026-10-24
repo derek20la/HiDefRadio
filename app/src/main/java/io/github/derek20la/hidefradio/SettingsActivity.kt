@@ -10,6 +10,7 @@ import android.text.format.Formatter
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.view.ViewCompat
@@ -20,6 +21,8 @@ import androidx.preference.PreferenceFragmentCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.github.derek20la.hidefradio.databinding.ActivitySettingsBinding
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -32,7 +35,7 @@ import java.util.Locale
  * 9f: an About section at the bottom (version, license, source code link,
  * open-source licenses; 14c: the privacy policy; build 7: "Getting started").
  * 13a step 2: a Storage section above it: "Clear saved data" (station logos,
- * remembered gains).
+ * remembered gains). Build 22: "Export favorites" / "Import favorites" there too.
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -86,6 +89,16 @@ class SettingsActivity : AppCompatActivity() {
 
     /** The list of settings itself (a "fragment" = a piece of a screen). */
     class SettingsFragment : PreferenceFragmentCompat() {
+
+        // Build 22: Android's own file pickers ("Save to" / "Open"). The user chooses where the
+        // file goes (Downloads, Google Drive, ...); the app gets access to that one file only, so
+        // it needs no storage permission. Registered here, before the fragment starts (Android's
+        // rule for these launchers).
+        private val exportLauncher = registerForActivityResult(
+            ActivityResultContracts.CreateDocument("text/plain")) { uri -> if (uri != null) exportTo(uri) }
+        private val importLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) importFrom(uri) }
+
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.settings, rootKey)
 
@@ -107,6 +120,22 @@ class SettingsActivity : AppCompatActivity() {
                 true
             }
             updateClearSummary()
+
+            // Build 22: "Export favorites" → the system's "Save to" screen, with a name ready.
+            findPreference<Preference>(KEY_EXPORT)?.setOnPreferenceClickListener {
+                if (Presets.load(requireContext()).isEmpty())
+                    Toast.makeText(requireContext(), R.string.export_none, Toast.LENGTH_SHORT).show()
+                else
+                    exportLauncher.launch("HiDefRadio-favorites-${today()}.txt")
+                true
+            }
+            // "Import favorites" → the system's "Open" screen (text files; "*/*" as well, because
+            // some file managers and cloud drives don't say what a .txt file is).
+            findPreference<Preference>(KEY_IMPORT)?.setOnPreferenceClickListener {
+                importLauncher.launch(arrayOf("text/plain", "*/*"))
+                true
+            }
+            updateFavoritesSummary()
 
             // --- 9f: About ---
 
@@ -154,6 +183,95 @@ class SettingsActivity : AppCompatActivity() {
         override fun onResume() {
             super.onResume()
             updateClearSummary()
+            updateFavoritesSummary()
+        }
+
+        /** Build 22: "Save your 12 favorites and their names to a file ..." */
+        private fun updateFavoritesSummary() {
+            val n = Presets.load(requireContext()).size
+            findPreference<Preference>(KEY_EXPORT)?.summary =
+                resources.getQuantityString(R.plurals.setting_export_summary, n, n)
+        }
+
+        /** "2026-10-24" - for the file's suggested name and its comment line. */
+        private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
+        /** Build 22: writes the favorites into the file the user picked. */
+        private fun exportTo(uri: Uri) {
+            val context = requireContext()
+            val list = Presets.load(context)
+            val text = Preset.exportText(list, today(), versionText())
+            val ok = try {
+                context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray(Charsets.UTF_8)) } != null
+            } catch (e: Exception) {           // IOException, SecurityException (a drive that went away)
+                false
+            }
+            val message = if (ok) resources.getQuantityString(R.plurals.export_done, list.size, list.size)
+                          else getString(R.string.export_failed)
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+
+        /**
+         * Build 22: reads a favorites file and asks what to do with it: add the ones you don't
+         * have yet (your list stays as it is), or replace your list with the file's. With no
+         * favorites yet, the file's are simply added. Never more than 1 MB is read (a favorites
+         * file is a few kB; anything bigger is the wrong file).
+         */
+        private fun importFrom(uri: Uri) {
+            val context = requireContext()
+            val text = try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val bytes = input.readBytes(MAX_IMPORT_BYTES + 1)
+                    if (bytes.size > MAX_IMPORT_BYTES) null else String(bytes, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+                null
+            }
+            val incoming = text?.let { Preset.importText(it) }
+            if (incoming == null || incoming.isEmpty()) {
+                Toast.makeText(context, if (text == null) R.string.import_failed else R.string.import_none,
+                               Toast.LENGTH_LONG).show()
+                return
+            }
+            val current = Presets.load(context)
+            val newOnes = Preset.merge(current, incoming).size - current.size
+            if (current.isEmpty()) { finishImport(Presets.addNew(context, incoming)); return }
+            MaterialAlertDialogBuilder(context)
+                .setTitle(R.string.import_title)
+                .setMessage(resources.getQuantityString(R.plurals.import_message, incoming.size, incoming.size, newOnes, current.size))
+                .setPositiveButton(R.string.import_add) { _, _ -> finishImport(Presets.addNew(context, incoming)) }
+                .setNeutralButton(R.string.import_replace) { _, _ ->
+                    Presets.replaceAll(context, incoming)
+                    finishImport(incoming.size, R.plurals.import_replaced)
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+
+        private fun finishImport(count: Int, message: Int = R.plurals.import_done) {
+            Toast.makeText(requireContext(), resources.getQuantityString(message, count, count),
+                           Toast.LENGTH_LONG).show()
+            updateFavoritesSummary()
+        }
+
+        /** "1.1-beta1 (build 22)" for the file's comment line. */
+        @Suppress("DEPRECATION")
+        private fun versionText(): String {
+            val context = requireContext()
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            return "${info.versionName ?: "?"} (build ${PackageInfoCompat.getLongVersionCode(info)})"
+        }
+
+        /** InputStream.readBytes(limit) does not exist; reads at most [limit] bytes. */
+        private fun java.io.InputStream.readBytes(limit: Int): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            while (out.size() < limit) {
+                val n = read(buf, 0, minOf(buf.size, limit - out.size()))
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
         }
 
         /** "14 station logos (212 kB), tuner gain remembered for 23 stations. ..." */
@@ -287,6 +405,9 @@ class SettingsActivity : AppCompatActivity() {
     companion object {
         // Keys of the Storage and About entries in res/xml/settings.xml
         const val KEY_CLEAR = "clear_data"              // 13a step 2
+        const val KEY_EXPORT = "export_favorites"       // build 22
+        const val KEY_IMPORT = "import_favorites"       // build 22
+        const val MAX_IMPORT_BYTES = 1_000_000          // build 22: a favorites file is a few kB
         const val KEY_VERSION = "about_version"
         const val KEY_WELCOME = "about_welcome"         // build 7
         const val KEY_LICENSE = "about_license"

@@ -109,6 +109,46 @@ data class Preset(
             return result
         }
 
+        /**
+         * Build 22: the favorites as a FILE (Settings -> Export favorites), to keep, to move to a
+         * new phone, or to move between the Play install and the GitHub install (they can't share
+         * data: two signing keys). The same lines encodeList() saves, after two header lines:
+         *   # HiDef Radio favorites 1
+         *   # 12 favorites, exported 2026-10-24 by 1.1-beta1 (build 22). Logos are not included ...
+         *   101100000 <TAB> 0 <TAB> KRTH <TAB> Adult Hits <TAB> <TAB>
+         *   ...
+         * "1" is the format's version (a later app can tell old files from new ones). Lines that
+         * start with "#" are comments. Plain text on purpose: it opens in any text editor, and
+         * people can share a list of their city's stations.
+         */
+        const val FILE_HEADER = "# HiDef Radio favorites 1"
+
+        fun exportText(list: List<Preset>, date: String, version: String): String =
+            FILE_HEADER + "\n" +
+                "# ${list.size} favorites, exported $date by $version. Logos are not included - " +
+                "each one comes back the next time that station's HD is received.\n" +
+                encodeList(list) + "\n"
+
+        /**
+         * Build 22: a file's text -> its favorites, or null when it isn't a favorites file at all
+         * (no header and no line that reads as a favorite). Comment lines and broken lines are
+         * skipped; a file listing the same station + program twice keeps the first one.
+         */
+        fun importText(text: String): List<Preset>? {
+            val found = decodeList(text.lines().filterNot { it.trimStart().startsWith("#") }.joinToString("\n"))
+                .filter { it.freqHz > 0 && it.program in 0..7 }
+            val unique = found.filterIndexed { i, p -> found.indexOfFirst { it.matches(p.freqHz, p.program) } == i }
+            return if (unique.isEmpty() && !text.trimStart().startsWith(FILE_HEADER)) null else unique
+        }
+
+        /**
+         * Build 22: "Add the new ones" - your list as it is (order, names, everything), then the
+         * file's favorites that you don't have yet (same frequency + program = you have it), in
+         * the file's order.
+         */
+        fun merge(current: List<Preset>, incoming: List<Preset>): List<Preset> =
+            current + incoming.filter { p -> current.none { it.matches(p.freqHz, p.program) } }
+
         // Tabs and new-lines would break the format -> replace them with spaces.
         private fun clean(s: String): String =
             s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ').trim()
