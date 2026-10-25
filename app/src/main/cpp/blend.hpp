@@ -451,7 +451,14 @@ private:
         // new figure, fade back in, instead of jumping in the middle of the HD.
         long long look = aligned_ ? FADE_FRAMES + GUARD_FRAMES : UNALIGNED_CLEAN;
         bool bad = !hdClean(play_ - offset_, look);
-        bool realign = aligned_ && alignedOk && std::llabs(al.offsetFrames - offset_) > tolerance_;
+        // (build 32) The tolerance is the larger of the fixed one and what the aligner says fits
+        // its results' scatter: still 3 frames on a normal FM station and 200 on AM, but up to 128
+        // (2.9 ms) on a station whose analog is processed differently (KKLQ: the median wanders by
+        // 10-40 frames from one measurement to the next, and each move was a "re-aligning" fade).
+        // A mismatch of a millisecond or two is heard, if at all, as a brief comb-filter colouring
+        // during the 0.5 s crossfade - nothing like a fade out and in.
+        long long tol = std::max((long long)tolerance_, (long long)al.toleranceFrames);
+        bool realign = aligned_ && alignedOk && std::llabs(al.offsetFrames - offset_) > tol;
         if (bad || realign) {
             if (state_ != TO_ANALOG) {
                 startFade(TO_ANALOG, aligned_, offset_, bad ? "dropout ahead" : "re-aligning");

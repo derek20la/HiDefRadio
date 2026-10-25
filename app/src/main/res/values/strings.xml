@@ -88,6 +88,8 @@
     <!-- 14c: direct sampling (a V3-type dongle on AM): the tuner is bypassed, so there is no gain -->
     <string name="overload_direct">overload! Try a shorter antenna</string>
     <string name="gain_direct">none - direct sampling (the tuner is bypassed on AM)</string>
+    <!-- Build 32: rtl_tcp on AM, and changing the gain changes nothing (a V3 on the server goes to direct sampling by itself) -->
+    <string name="gain_no_effect">no effect - the server\'s dongle is probably in direct sampling</string>
 
     <!-- Milestone 10a: media notification, pause -->
     <string name="pause">Pause</string>

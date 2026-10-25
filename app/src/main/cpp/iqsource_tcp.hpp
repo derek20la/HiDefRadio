@@ -28,7 +28,9 @@
 //     auto-gain falls back to the tuner's own AGC (as it would with USB).
 //   - direct sampling: an RTL-SDR Blog V3 on the server still switches to direct sampling for
 //     AM by itself (its librtlsdr does that), but we can't ask - directSampling() says false,
-//     and the gain calls then simply do nothing there. Harmless.
+//     and the gain calls then simply do nothing there. Harmless - and since build 32 the
+//     radio's auto-gain notices it on AM (the peaks don't move with the gain) and shows it
+//     like direct sampling (native-lib.cpp, g_gainNoEffect).
 //   - the dongle's USB names. describe() says "rtl_tcp at host:port" and the tuner type.
 //
 // HOW THE BYTES FLOW

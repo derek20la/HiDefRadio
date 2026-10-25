@@ -1050,6 +1050,9 @@ class MainActivity : AppCompatActivity() {
             // 14c: a V3-type dongle on AM feeds the antenna straight into its converter
             // ("direct sampling") - the tuner and its gain are not in the signal path.
             s.direct -> getString(R.string.gain_direct)
+            // Build 32: the same over rtl_tcp, where the server can't tell us - the
+            // auto-gain saw that changing the gain changed nothing.
+            s.gainNoEffect -> getString(R.string.gain_no_effect)
             s.gainDb < 0 -> "tuner AGC"
             !s.gainAuto -> f("%.1f dB (manual)", s.gainDb)
             s.gainRemembered -> f("%.1f dB (auto, remembered)", s.gainDb)
@@ -1057,7 +1060,7 @@ class MainActivity : AppCompatActivity() {
             else -> f("%.1f dB (auto)", s.gainDb)
         }
         val overload = getString(when {
-            s.direct -> R.string.overload_direct           // 14c: no gain to lower
+            s.direct || s.gainNoEffect -> R.string.overload_direct   // 14c / build 32: no gain to lower
             s.gainAuto -> R.string.overload_auto
             else -> R.string.overload
         })

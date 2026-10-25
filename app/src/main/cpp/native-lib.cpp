@@ -174,6 +174,14 @@ static std::atomic<bool> g_gainAuto{true};     // chosen by our auto-gain (true)
 // gain to set: no auto-gain search, no watchdog, no manual gain. (The V4 never does this:
 // its R828D tuner has a built-in upconverter for AM, and its gain works as usual.)
 static std::atomic<bool> g_direct{false};
+// Build 32: THE SAME THING OVER rtl_tcp. A V3 behind an rtl_tcp server goes to direct sampling
+// on AM by itself too, but the server can't tell us (iqsource_tcp.hpp: directSampling() is always
+// false), and the gain commands then do nothing there. doAutoGain() notices it instead: the gains
+// it tried span 15 dB or more and the peaks it measured hardly moved (GAIN_NO_EFFECT_*). Then
+// it is treated like direct sampling: g_gainTenths = -1 (the Gain row says so, the watchdog stands
+// still, nothing goes into GainMemory). Only on the rtl_tcp source AND on AM: on USB the driver
+// tells us (g_direct), and on FM the tuner is always in use.
+static std::atomic<bool> g_gainNoEffect{false};
 // M10c: how the auto-gain found its starting gain on this tune.
 static std::atomic<bool> g_gainRemembered{false};   // true = the remembered gain was fine (no search)
 static std::atomic<int> g_gainSearchMs{-1};         // how long the auto-gain took (-1 = manual gain)
@@ -890,6 +898,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_closeDongleNative(
     }
     old.reset();       // deleting the source closes it (UsbSource: rtlsdr_close; TcpSource: the socket)
     g_direct = false;   // 14c: the next dongle starts with its tuner in use
+    g_gainNoEffect = false;   // build 32: ... and with a gain that works
 }
 
 
@@ -1194,6 +1203,23 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
 static const float AUTO_TARGET_DBFS = -4.0f;    // search: highest gain whose peak stays below this
 static const float HINT_MAX_DBFS = -1.5f;       // remembered gain: louder than this = no (= the watchdog's limit)
 static const float HINT_MIN_DBFS = -10.0f;      //   ... quieter than this = signals got weaker, search again
+// Build 32 (rtl_tcp on AM only, see g_gainNoEffect): "the gain has no effect" = the tried gains
+// span at least this much ...
+static const int   GAIN_NO_EFFECT_SPAN_TENTHS = 200;  // 20 dB: when every answer is the same the search runs to
+                                                      // one end (R820T, 29 steps: 25.4 -> 49.6 or -> 0 dB = 24-25 dB;
+                                                      // a remembered gain + the far end: at least half the range)
+// ... and the peaks measured at them differ by less than this. A working gain moves the peak
+// dB for dB (until the signal clips at 0 dBFS), so 20 dB of gain = some 20 dB of peak. At ONE
+// gain the AM band's peak still wobbles from burst to burst: over 5 bursts (one search) KBRT 740
+// spreads 0.8 dB (median; 95 % 1.4, worst 1.8), KMZT 1260 3.0 dB (95 % 4.4, worst 5.2) - measured
+// on the recordings. 6 dB is above that wobble and far below what a working gain does. (If the
+// level the server delivers happens to sit right at the target, the search goes up and down and
+// may not span 20 dB: then nothing is said, as before build 32 - a false "no", never a false "yes".)
+// A peak this close to full scale is clipping, not "no effect" (the gain may well work, the signal
+// is just too strong at every step tried) - not counted either.
+static const float GAIN_NO_EFFECT_DB = 6.0f;
+static const float GAIN_NO_EFFECT_CLIP_DBFS = -0.5f;
+static const int   AUTO_GAIN_NO_EFFECT = -2;          // doAutoGain()'s answer for that case
 
 // Sets [gain] and measures the peak (dBFS) of a short burst of samples.
 // Returns false if the dongle didn't answer.
@@ -1218,7 +1244,10 @@ static bool measurePeak(std::vector<uint8_t> &buf, int gain, float *peakDb) {
     return true;
 }
 
-static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
+// Build 32: [checkEffect] (rtl_tcp on AM only) = also find out whether the gain does anything at
+// all (g_gainNoEffect). If it doesn't, returns AUTO_GAIN_NO_EFFECT and *chosenPeakDbfs = the
+// last peak measured. With checkEffect false nothing differs from build 31, call for call.
+static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint, bool checkEffect) {
     *usedHint = false;
     std::vector<int> gains = g_src->gainSteps();        // the tuner's steps, low to high
     if (gains.empty()) return -1;
@@ -1228,16 +1257,47 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
     std::vector<uint8_t> buf(128 * 256);                 // same size nrsc5 uses (~11 ms)
     float db = 0.0f;
 
+    // Build 32: the gains tried and the peaks they gave (min / max), for the "no effect" check.
+    int triedLo = INT_MAX, triedHi = INT_MIN;
+    float peakLo = 99.0f, peakHi = -99.0f;
+    auto note = [&](int gain, float peak) {
+        triedLo = std::min(triedLo, gain); triedHi = std::max(triedHi, gain);
+        peakLo = std::min(peakLo, peak); peakHi = std::max(peakHi, peak);
+    };
+    auto noEffect = [&]() {
+        return checkEffect && triedHi - triedLo >= GAIN_NO_EFFECT_SPAN_TENTHS &&
+               peakHi - peakLo < GAIN_NO_EFFECT_DB && peakHi < GAIN_NO_EFFECT_CLIP_DBFS;
+    };
+    auto reportNoEffect = [&]() {
+        LOGI("auto-gain: the gain has no effect (%.1f ... %.1f dB tried, peak %.1f ... %.1f dBFS) - "
+             "the rtl_tcp server's dongle is probably in direct sampling", triedLo / 10.0f, triedHi / 10.0f, peakLo, peakHi);
+        *chosenPeakDbfs = db;
+        return AUTO_GAIN_NO_EFFECT;
+    };
+
     // M10c: first try the remembered gain (if it's one of this tuner's steps).
     if (hintTenths >= 0 && std::find(gains.begin(), gains.end(), hintTenths) != gains.end()) {
         if (!measurePeak(buf, hintTenths, &db)) return -1;
         if (db < HINT_MAX_DBFS && db > HINT_MIN_DBFS) {
+            if (checkEffect) {
+                // Build 32: one look at the step farthest from it. (The remembered gain may come
+                // from a USB dongle on the same frequency; the server's may not obey at all.)
+                const float hintDb = db;
+                note(hintTenths, db);
+                int far = hintTenths - gains.front() >= gains.back() - hintTenths ? gains.front() : gains.back();
+                if (!measurePeak(buf, far, &db)) return -1;
+                note(far, db);
+                if (noEffect()) return reportNoEffect();
+                g_src->setGain(hintTenths);             // it works: back to the remembered gain
+                db = hintDb;
+            }
             LOGI("auto-gain: remembered %.1f dB is fine (peak %.1f dBFS)", hintTenths / 10.0f, db);
             *chosenPeakDbfs = db;
             *usedHint = true;
             return hintTenths;
         }
         LOGI("auto-gain: remembered %.1f dB doesn't fit now - searching", hintTenths / 10.0f);
+        if (checkEffect) note(hintTenths, db);
     }
 
     // The search: "higher or lower?" until we've found the highest gain
@@ -1250,6 +1310,7 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
         int mid = (low + high) / 2;
         int gain = gains[mid];
         if (!measurePeak(buf, gain, &db)) return -1;
+        if (checkEffect) note(gain, db);
 
         if (db < AUTO_TARGET_DBFS) {    // still below the target: try higher
             bestGain = gain;
@@ -1264,6 +1325,7 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint) {
         }
     }
 
+    if (noEffect()) return reportNoEffect();            // build 32 (the gain stays where the search left it - it doesn't matter)
     g_src->setGain(bestGain);
     LOGI("auto-gain: chose %.1f dB (peak %.1f dBFS)", bestGain / 10.0f, bestDb);
     *chosenPeakDbfs = bestDb;
@@ -1742,6 +1804,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
 
     std::string gainText;
     char gbuf[96];
+    g_gainNoEffect = false;                               // build 32: found out afresh on every tune
     if (direct) {
         gainText = "no tuner gain (direct sampling)";
         g_gainTenths = -1;                                // nothing to show, nothing to watch
@@ -1762,8 +1825,14 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         float peak = 0.0f;
         bool usedHint = false;
         Clock::time_point searchStart = Clock::now();     // M10c: time just the gain part
-        int chosen = doAutoGain(&peak, hintTenthsDb, &usedHint);   // takes well under a second
-        if (chosen < 0) {
+        // Build 32: on rtl_tcp + AM, also check that the gain does anything (see g_gainNoEffect).
+        const bool checkEffect = std::strcmp(g_src->kind(), "rtl_tcp") == 0 && freqHz < AM_BELOW_HZ;
+        int chosen = doAutoGain(&peak, hintTenthsDb, &usedHint, checkEffect);   // takes well under a second
+        if (chosen == AUTO_GAIN_NO_EFFECT) {
+            gainText = "gain has no effect (the server's dongle is probably in direct sampling)";
+            g_gainNoEffect = true;
+            chosen = -1;                                  // like direct sampling: nothing to show, nothing to watch
+        } else if (chosen < 0) {
             g_src->setGainMode(false);                    // fall back to tuner AGC
             gainText = "gain auto FAILED - using tuner AGC";
         } else {
@@ -1930,6 +1999,8 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getStatusNative(JNIEnv* env, job
     // 9d: gain on the same line as the peak (they belong together).
     if (g_direct) snprintf(buf, sizeof(buf), "Peak: %.1f dBFS   Gain: none (direct sampling)\n",
                            g_peakDbfs.load());                                  // 14c
+    else if (g_gainNoEffect) snprintf(buf, sizeof(buf), "Peak: %.1f dBFS   Gain: no effect (server in direct sampling?)\n",
+                                      g_peakDbfs.load());                       // build 32
     else if (g_gainTenths < 0) snprintf(buf, sizeof(buf), "Peak: %.1f dBFS   Gain: tuner AGC\n",
                                    g_peakDbfs.load());
     else snprintf(buf, sizeof(buf), "Peak: %.1f dBFS   Gain: %.1f dB (%s)\n",
@@ -2174,9 +2245,10 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // M11: analog FM. 11d: audioSource = hd / analog / auto; demodOn = the
     // demodulator runs (Analog only, Auto); hdLoadPct = nrsc5's own decode time.
     int src = g_audioSource.load();
-    snprintf(buf, sizeof(buf), "am=%d\ndirect=%d\naudioSource=%s\ndemodOn=%d\nfmCarrierDb=%.1f\nfmQuietDb=%.1f\nfmOffsetHz=%.0f\nfmLoadPct=%d\nhdLoadPct=%d\n",
+    snprintf(buf, sizeof(buf), "am=%d\ndirect=%d\ngainNoEffect=%d\naudioSource=%s\ndemodOn=%d\nfmCarrierDb=%.1f\nfmQuietDb=%.1f\nfmOffsetHz=%.0f\nfmLoadPct=%d\nhdLoadPct=%d\n",
              g_mode == NRSC5_MODE_AM ? 1 : 0,          // 9c
              g_direct.load() ? 1 : 0,                  // 14c: direct sampling (no tuner gain)
+             g_gainNoEffect.load() ? 1 : 0,            // build 32: rtl_tcp on AM, the gain does nothing
              src == SOURCE_ANALOG ? "analog" : src == SOURCE_AUTO ? "auto" : "hd", demodWanted() ? 1 : 0,
              g_fmCarrierDb.load(), g_fmQuietDb.load(), g_fmOffsetHz.load(), g_fmLoadPct.load(), g_hdLoadPct.load());
     out += buf;
@@ -2221,8 +2293,8 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
         const char *state = a.state == 2 ? "ok" : a.state == 3 ? "nomatch" : a.state == 1 ? "measuring" : "waiting";
         snprintf(buf, sizeof(buf),
                  "alignState=%s\nalignMs=%.1f\nalignFrames=%lld\nalignCorr=%.3f\nalignGainDb=%.1f\n"
-                 "alignCount=%d\nalignTries=%d\nalignJumps=%d\n",
-                 state, a.dMs, a.offsetFrames, a.corr, a.gainDb, a.accepted, a.attempts, a.jumps);
+                 "alignCount=%d\nalignTries=%d\nalignJumps=%d\nalignScatter=%d\nalignTol=%d\n",   // build 32: scatter (MAD) + tolerance, frames
+                 state, a.dMs, a.offsetFrames, a.corr, a.gainDb, a.accepted, a.attempts, a.jumps, a.scatterFrames, a.toleranceFrames);
         out += buf;
     }
     // Build 6: the clock correction (drift.hpp). clockState: off (nothing known, or the
@@ -2655,17 +2727,24 @@ Java_io_github_derek20la_hidefradio_RadioEngine_measureAlignmentNative(JNIEnv*, 
         // Build 6: every accepted measurement also tells the clock correction how the analog
         // moves against the HD (drift.hpp).
         align::Status al = g_align.status();
-        g_drift.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, al.state == 2, al.offsetFrames);
+        // (build 32) A result accepted only as part of a cluster of weak ones (aligner.hpp, KKLQ-like
+        // stations) does not steer the clock: it is good enough to say WHERE the HD sits, give or take a
+        // couple of ms, not to measure a slope of a few ppm (drifttest "processed differently": fed in,
+        // the clock figure wandered up to 7 ppm; left out, it stays within ~1 ppm as before).
+        if (!r.weak) g_drift.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, al.state == 2, al.offsetFrames);
         drift::Status d = g_drift.status();
         char note[80] = "";                         // build 8: a witness that was not believed (drift.hpp)
         if (d.state != 0 && d.unused != 0)
             snprintf(note, sizeof(note), "; the %s says %+.1f ppm - not used", d.unused == 1 ? "audio" : "tuning offset", d.unusedPpm);
-        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f), analog %+.1f dB%s; dongle clock %+.1f ppm%s%s",
-             r.dMs, r.offsetFrames, r.corr, r.gainDb, r.usedHint ? "" : " (full search)",
+        char weak[48] = "";                         // build 32: accepted as one of a cluster of weak results (aligner.hpp)
+        if (r.weak) snprintf(weak, sizeof(weak), " (weak, cluster of %d)", r.cluster);
+        LOGI("Alignment: analog lags HD1 by %.1f ms (offset %lld frames, r %.3f%s), analog %+.1f dB%s; dongle clock %+.1f ppm%s%s",
+             r.dMs, r.offsetFrames, r.corr, weak, r.gainDb, r.usedHint ? "" : " (full search)",
              d.clockPpm, d.state == 2 ? " (measured)" : d.state == 1 ? " (from the tuning offset)" : " (not corrected)", note);
         return 1;
     }
-    LOGI("Alignment: no match (r %.3f%s; HD audio there: %.0f %%)", r.corr, r.usedHint ? ", near the expected value" : ", full search", r.hdCover * 100.0f);
+    LOGI("Alignment: no match (r %.3f%s; HD audio there: %.0f %%%s)", r.corr, r.usedHint ? ", near the expected value" : ", full search", r.hdCover * 100.0f,
+         r.weak ? "; a candidate" : "");
     return 2;
 }
 

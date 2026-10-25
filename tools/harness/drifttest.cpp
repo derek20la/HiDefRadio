@@ -141,7 +141,7 @@ static Outcome run(const Setup &su) {
             align::Result r;
             if (al.measure(r)) {
                 o.measurements++;
-                if (r.accepted) { o.accepted++; o.rAvg += r.corr; as = al.status(); tracker.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, as.state == 2, as.offsetFrames); }
+                if (r.accepted) { o.accepted++; o.rAvg += r.corr; as = al.status(); if (!r.weak) tracker.addMeasurement(r.at, r.offsetFine, r.corr, r.epoch, as.state == 2, as.offsetFrames); }
                 if (su.verbose) {
                     drift::Status d = tracker.status(); as = al.status();
                     printf("  t %6.1f  offset %lld (%.2f) r %.2f %s  %s median %lld  clock %+6.1f ppm (%s, %d pts, spread %.1f, restarts %d, skipped %d)  blend %d fades %d/%d\n", t, r.offsetFrames, r.offsetFine, r.corr,

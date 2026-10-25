@@ -93,6 +93,44 @@ static const int    KEEP_RESULTS = 9;                  // median over the last a
 static const int    AGREE_FRAMES = 3;                  // two results this close = "ok" (3 frames = 0.07 ms)
 static const int    JUMP_FRAMES  = 200;                // a result this far from the median = the alignment changed
 static const int    NO_MATCH_AFTER = 3;                // failed attempts before we say "no match"
+// ---- Stations whose HD and analog are processed very differently (build 32, FM only) ----
+// KKLQ 100.3 (2026-09-28 / 10-25, downtown LA): the same programme, but the analog goes through
+// a different audio processor, so the waveforms correlate at r 0.3-0.55 only, and the peak the
+// search finds wanders by up to ~125 frames (2.8 ms) from one measurement to the next - 10x a
+// normal station's 0-5 frames. Two things went wrong with the rules above on such a station:
+//   1. Results under ACCEPT_CORR were thrown away, although they land on the SAME offset as the
+//      strong ones (within ~50 frames). Two unrelated programmes never get above r 0.11 anywhere
+//      in the -1..+6 s search, so a cluster of weak results in one place is not chance: a result
+//      with ACCEPT_WEAK <= r < ACCEPT_CORR is kept as a CANDIDATE, and when three candidates (or
+//      strong results) of the last CAND_WINDOW attempts lie within CLUSTER_FRAMES of each other,
+//      the cluster is accepted. (A second, false peak +1010 frames after the true one won a
+//      measurement now and then at r 0.26-0.37, never three in a row: 128 frames keeps it out.
+//      Peak-to-sidelobe ratios were tried first and do not separate the two - music repeats.)
+//   2. "ok" (state 2 = the last two results within AGREE_FRAMES) lasted one measurement only,
+//      and the blend needs "ok" to fade back to the HD after a dropout: on 10-25 it stayed on the
+//      analog for the rest of the recording with six good results in hand. So the aligner now
+//      measures the scatter of its results (the MAD around a drift line, Status::scatterFrames) and, once the scatter
+//      says "this is such a station" (MAD > SCATTER_SMALL), "ok" also holds while the newest result
+//      lies within TOL_PER_MAD x MAD (TOL_MIN_FRAMES ... TOL_MAX_FRAMES) of the median - the same figure
+//      blend.hpp uses before it calls a moved median a re-alignment (Status::toleranceFrames).
+// On a normal station (MAD 0-2 on every one measured: KRTH, KLOS, KKGO, KGGI, KDAY) the scatter
+// rule is never reached and a weak result turns up only right after a sync loss, alone, so the
+// behaviour is exactly as before. AM (envelope mode) is not touched: its own figures are wider.
+static const float  ACCEPT_WEAK = 0.30f;               // a result at least this good is a candidate (unrelated programmes: <= 0.11)
+static const int    CAND_WINDOW = 6;                   // candidates of the last this many attempts count
+static const int    CAND_NEEDED = 3;                   // ... and this many in one place make a match
+static const int    CLUSTER_FRAMES = 128;              // "one place" = within this of each other (2.9 ms; the false peak sits +1010)
+static const int    SCATTER_SMALL = 2;                 // MAD up to this = a normal station: the old rules, unchanged
+static const int    TOL_PER_MAD = 3;                   // a scattering station: tolerance = this x MAD ...
+static const int    TOL_MIN_FRAMES = 64;               // ... at least this (1.5 ms: with only 2-3 results in hand the MAD
+                                                       //     understates the scatter - KKLQ 10-25 #2: MAD 16, then the
+                                                       //     median moved 49 frames = a needless "re-aligning" fade) ...
+static const int    TOL_MAX_FRAMES = 128;              // ... and never more than this (2.9 ms)
+static const double DETREND_MAX_PPM = 200.0;           // the scatter is measured around a straight line through the results
+                                                       // (a clock error that drift.hpp has not taken out yet moves them steadily
+                                                       // one way - that is not scatter: drifttest "no correction, 57 ppm"), but
+                                                       // the line may be no steeper than a real crystal can be off: KKLQ's
+                                                       // 65 frames in 2 s (740 ppm) is scatter, whatever a line says
 // ---- AM (build 18): compare ENVELOPES, not waveforms ----
 // On AM the analog and the HD audio of the same programme hardly correlate as waveforms
 // (r 0.4-0.5 on KMZT 1260): an AM transmitter's audio processor runs the analog through a
@@ -200,6 +238,9 @@ struct Result {
                                   // (0 ... 1; the rest was missing or zero-filled by nrsc5). A failed
                                   // attempt only says "these are two different programmes" when the HD
                                   // was really there - stationid.hpp looks at this before it believes one.
+    bool  weak = false;           // r was below ACCEPT_CORR (a candidate; see ACCEPT_WEAK). With
+                                  // `accepted` it was accepted as part of a cluster of `cluster` results.
+    int   cluster = 0;            // candidates in one place at this measurement (0 = not looked at)
 };
 
 struct Status {
@@ -214,6 +255,11 @@ struct Status {
     float gainDb = 0;             // median analog-vs-HD loudness, dB
     long long hdFrames = 0;       // HD1 frames received since the tune
     long long analogFrames = 0;   // analog frames received since the tune
+    int   scatterFrames = 0;      // how much the accepted results scatter around their median (the MAD,
+                                  // frames): 0-2 on a normal station, 5-40 on one processed differently
+    int   toleranceFrames = 0;    // how far a result (or the blend's offset) may sit from the median and
+                                  // still count as the same alignment: AGREE_FRAMES (or AM's) while the
+                                  // scatter is small, TOL_PER_MAD x MAD up to TOL_MAX_FRAMES otherwise
 };
 
 class Aligner {
@@ -231,7 +277,8 @@ public:
         hdRun_ = false; hdRunFrames_ = 0; hdAnchor_ = 0; hdLower_ = LLONG_MIN; hdUpper_ = LLONG_MAX;
         hdFirstBlockLen_ = 0;
         envAccA_ = envAccH_ = 0; envCntA_ = envCntH_ = 0;
-        results_.clear(); status_ = Status(); nextTryFrame_ = 0; failures_ = 0;
+        results_.clear(); cands_.clear(); status_ = Status(); nextTryFrame_ = 0; failures_ = 0;
+        status_.toleranceFrames = agreeFrames_;
         hintFrames_ = (long long)(EXPECTED_D_SECONDS * FRAME_RATE); hintFailed_ = false;
         envFa_.init(); envFh_.init();
     }
@@ -243,6 +290,7 @@ public:
         envMode_ = on;
         agreeFrames_ = on ? ENV_AGREE_FRAMES : AGREE_FRAMES;
         jumpFrames_ = on ? ENV_JUMP_FRAMES : JUMP_FRAMES;
+        status_.toleranceFrames = agreeFrames_;
         envFa_.init(); envFh_.init();
     }
 
@@ -314,7 +362,7 @@ public:
                 // Audio is back after an outage: the HD stream is anchored afresh, so the
                 // content offset changes - old results no longer apply. (The real-time
                 // figure stays the same, and the expected value is kept as the hint.)
-                results_.clear(); failures_ = 0; status_.epoch++;
+                results_.clear(); cands_.clear(); failures_ = 0; status_.epoch++;
                 if (status_.state == 2) status_.state = 1;
                 nextTryFrame_ = aNext_;
             }
@@ -366,7 +414,7 @@ public:
         // The analog frames are numbered afresh from here (the demodulator's own delay, ~20
         // frames, is no longer in the numbers), so offsets measured before the gap can't be
         // compared with the ones to come: start over, like after a re-anchored HD run.
-        results_.clear(); failures_ = 0; status_.epoch++;
+        results_.clear(); cands_.clear(); failures_ = 0; status_.epoch++;
         if (status_.state == 2) status_.state = 1;
     }
 
@@ -458,7 +506,9 @@ public:
         }
         float gainDb = (ea > 0 && eh > 0) ? (float)(10.0 * std::log10(ea / eh)) : 0.f;
         const bool accepted = rFine >= ACCEPT_CORR && (!envMode_ || (cover >= ENV_MIN_COVER && std::fabs(gainDb) <= ENV_MAX_GAIN_DB));
-        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, accepted, usedHint, gainDb, cover);
+        // FM only: not good enough on its own, but good enough to count towards a cluster (ACCEPT_WEAK).
+        const bool weak = !envMode_ && !accepted && rFine >= ACCEPT_WEAK;
+        return finish(out, offsetFrames, offsetFine, a0, rFine, corr, accepted, usedHint, gainDb, cover, weak);
     }
 
 private:
@@ -472,7 +522,7 @@ private:
     }
 
     bool finish(Result &out, long long offsetFrames, double offsetFine, long long a0, float r, long long corr,
-                bool accepted, bool usedHint, float gainDb, float cover) {
+                bool accepted, bool usedHint, float gainDb, float cover, bool weak = false) {
         std::lock_guard<std::mutex> lock(m_);
         status_.attempts++;
         out = Result();
@@ -482,26 +532,87 @@ private:
         out.dMs = (float)((offsetFrames - corr) * 1000.0 / FRAME_RATE);
         out.usedHint = usedHint;
         out.hdCover = cover;
+        out.weak = weak;
+        // ---- (build 32) weak results: a candidate, and maybe the third of a cluster ----
+        // Every strong or weak result of the current epoch goes on the candidate list; only the
+        // last CAND_WINDOW attempts' worth is kept. A weak result is accepted when CAND_NEEDED
+        // candidates fall within CLUSTER_FRAMES of each other in a window that contains it; the
+        // cluster's weak members (the strong ones are in results_ already) then join results_ in
+        // time order, so the median and the scatter are the cluster's. A strong result is handled
+        // exactly as before - the list is only looked at when a weak one comes in.
+        std::vector<Result> joining;                             // earlier cluster members not yet in results_
+        if (accepted || weak) {
+            out.epoch = status_.epoch;
+            Cand c; c.res = out; c.attempt = status_.attempts; c.inResults = accepted;
+            cands_.push_back(c);
+        }
+        while (!cands_.empty() && cands_.front().attempt <= status_.attempts - CAND_WINDOW) cands_.erase(cands_.begin());
+        if (weak) {
+            // The window of CLUSTER_FRAMES that holds the most candidates and the newest one.
+            int best = 0; long long bestLo = 0;
+            for (const Cand &a : cands_) {
+                long long lo = a.res.offsetFrames;
+                if (offsetFrames < lo || offsetFrames > lo + CLUSTER_FRAMES) continue;
+                int n = 0;
+                for (const Cand &b : cands_) if (b.res.offsetFrames >= lo && b.res.offsetFrames <= lo + CLUSTER_FRAMES) n++;
+                if (n > best) { best = n; bestLo = lo; }
+            }
+            out.cluster = best;
+            if (best >= CAND_NEEDED) {
+                accepted = true; out.accepted = true;
+                cands_.back().inResults = true;                  // the newest = out, pushed below
+                for (size_t i = 0; i + 1 < cands_.size(); i++) {
+                    Cand &a = cands_[i];
+                    if (!a.inResults && a.res.offsetFrames >= bestLo && a.res.offsetFrames <= bestLo + CLUSTER_FRAMES) {
+                        a.inResults = true;
+                        joining.push_back(a.res);                // in time order
+                    }
+                }
+            }
+        }
         if (accepted) {
             status_.accepted++;
             status_.corr = r;
             // After a sync loss nrsc5 can line its output up differently (seen: exactly
             // one 2,048-frame piece later) -> the old results are wrong now, start over.
-            if (!results_.empty() && std::llabs(offsetFrames - status_.offsetFrames) > jumpFrames_) {
+            // (A cluster is judged by its middle member.)
+            long long judge = offsetFrames;
+            if (!joining.empty()) {
+                std::vector<long long> jo; for (const Result &q : joining) jo.push_back(q.offsetFrames);
+                jo.push_back(offsetFrames);
+                std::sort(jo.begin(), jo.end()); judge = jo[jo.size() / 2];
+            }
+            if (!results_.empty() && std::llabs(judge - status_.offsetFrames) > jumpFrames_) {
                 results_.clear();
                 status_.jumps++; status_.epoch++;
+                // The candidate list starts over too - with this cluster, which belongs to the new epoch.
+                std::vector<Cand> keep;
+                for (Cand &a : cands_) if (a.inResults && (a.res.at == out.at || std::llabs(a.res.offsetFrames - judge) <= CLUSTER_FRAMES))
+                    { a.res.epoch = status_.epoch; keep.push_back(a); }
+                cands_ = keep;
+                for (Result &q : joining) q.epoch = status_.epoch;
             }
+            for (const Result &q : joining) results_.push_back(q);
             out.epoch = status_.epoch;
             results_.push_back(out);
-            if (results_.size() > (size_t)KEEP_RESULTS) results_.erase(results_.begin());
+            while (results_.size() > (size_t)KEEP_RESULTS) results_.erase(results_.begin());
             std::vector<long long> offs; std::vector<float> gains;
             for (const Result &q : results_) { offs.push_back(q.offsetFrames); gains.push_back(q.gainDb); }
             std::sort(offs.begin(), offs.end()); std::sort(gains.begin(), gains.end());
             status_.offsetFrames = offs[offs.size() / 2];
             status_.gainDb = gains[gains.size() / 2];
             status_.dMs = (float)((status_.offsetFrames - corr) * 1000.0 / FRAME_RATE);
+            status_.scatterFrames = scatter();
+            // The tolerance that goes with it (blend.hpp uses it too): the plain "agree" figure
+            // while the scatter is small (every normal station), TOL_PER_MAD x MAD (clamped) above that.
+            const bool scattering = !envMode_ && status_.scatterFrames > SCATTER_SMALL;
+            status_.toleranceFrames = scattering ? std::max(TOL_MIN_FRAMES, std::min(TOL_MAX_FRAMES, TOL_PER_MAD * status_.scatterFrames)) : agreeFrames_;
             size_t n = results_.size();
             bool agree = n >= 2 && std::llabs(results_[n - 1].offsetFrames - results_[n - 2].offsetFrames) <= agreeFrames_;
+            // (build 32) On a scattering station "ok" holds while the newest result sits within
+            // the tolerance of the median; a freshly accepted cluster is an agreement by itself.
+            if (scattering && std::llabs(offsetFrames - status_.offsetFrames) <= status_.toleranceFrames) agree = true;
+            if (!joining.empty()) agree = true;
             status_.state = agree ? 2 : 1;
             // Re-measure every 5 s - but confirm a first result after 1 s already (the
             // blend waits for two agreeing results, so this gets the HD in ~4 s sooner).
@@ -515,6 +626,31 @@ private:
             nextTryFrame_ = aNext_ + 2 * FRAME_RATE;                 // keep trying every 2 s
         }
         return true;
+    }
+
+    // (build 32) How much results_ scatter, in frames: the MAD (median distance from the median)
+    // of their distances from a least-squares line through them, the line's slope limited to
+    // +-DETREND_MAX_PPM. 0-2 frames on a normal station, 5-40 on KKLQ. Call with m_ held.
+    int scatter() const {
+        const size_t n = results_.size();
+        if (n < 2) return 0;
+        double ma = 0, mo = 0;
+        for (const Result &q : results_) { ma += (double)q.at; mo += (double)q.offsetFrames; }
+        ma /= n; mo /= n;
+        double sxy = 0, sxx = 0;
+        for (const Result &q : results_) { double x = q.at - ma; sxy += x * (q.offsetFrames - mo); sxx += x * x; }
+        double slope = sxx > 0 ? sxy / sxx : 0.0;
+        const double cap = DETREND_MAX_PPM * 1e-6;
+        slope = std::max(-cap, std::min(cap, slope));
+        std::vector<double> res;
+        for (const Result &q : results_) res.push_back(q.offsetFrames - (mo + slope * (q.at - ma)));
+        std::sort(res.begin(), res.end());
+        double med = n % 2 ? res[n / 2] : 0.5 * (res[n / 2 - 1] + res[n / 2]);
+        std::vector<double> dev;
+        for (double v : res) dev.push_back(std::fabs(v - med));
+        std::sort(dev.begin(), dev.end());
+        double mad = n % 2 ? dev[n / 2] : 0.5 * (dev[n / 2 - 1] + dev[n / 2]);
+        return (int)std::lround(mad);
     }
 
     static std::vector<float> decimate(const std::vector<float> &x, int m) {
@@ -575,6 +711,8 @@ private:
     bool hdRun_ = false; long long hdRunFrames_ = 0, hdAnchor_ = 0, hdLower_ = 0, hdUpper_ = 0, hdFirstBlockLen_ = 0;
     float envAccA_ = 0, envAccH_ = 0; int envCntA_ = 0, envCntH_ = 0;
     std::vector<Result> results_; Status status_;
+    struct Cand { Result res; int attempt = 0; bool inResults = false; };   // see finish(): weak results
+    std::vector<Cand> cands_;
     long long nextTryFrame_ = 0; int failures_ = 0;
     long long hintFrames_ = LLONG_MIN; bool hintFailed_ = false;
     bool envMode_ = false; EnvFollower envFa_, envFh_;                  // AM: envelopes (setEnvelopeMode)

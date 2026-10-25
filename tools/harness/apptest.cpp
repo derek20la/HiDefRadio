@@ -2,7 +2,7 @@
 // recording. Usage:  IQFILE=x.cu8 IQPACE=1 ./apptest <freqHz> <source 0 hd/1 analog/2 auto> <seconds> [events...]
 //   WAVOUT=out.wav also saves the audio the app would play.
 //   CALLS="KGGI KJNY" = the calls the FCC list has on this frequency (for the RDS call rules).
-//   GAIN=auto = start with the app's auto-gain (default: a manual 30.0 dB);  DONGLE=V3 = see rtl_stub.c.
+//   GAIN=auto = start with the app's auto-gain (default: a manual 30.0 dB; GAINHINT=297 = a remembered 29.7 dB);  DONGLE=V3 = see rtl_stub.c.
 //   IQSTEP=1 = "virtual time": no waiting, the same numbers every run (see below);  PRINT=1 = a status line every second
 //   DRIFT=off = no clock correction (drift.hpp);  SIGDUMP=20 = print the app's whole status text once, at 20 s
 //   HDREST=off = the HD search never rests (hdsearch.hpp) - the engine as it was before build 9
@@ -92,7 +92,9 @@ int main(int argc, char **argv) {
     }
     const char *gainEnv = getenv("GAIN");
     int gain = (gainEnv && strcmp(gainEnv, "auto") == 0) ? -1 : 300;
-    fprintf(stderr, "%s\n", str(J(startStreamNative)(&env, nullptr, hz, gain, -1)).c_str());
+    // GAINHINT=297 (build 32): with GAIN=auto, the gain "remembered" for this frequency (GainMemory.kt), in tenths of a dB
+    const int gainHint = getenv("GAINHINT") ? atoi(getenv("GAINHINT")) : -1;
+    fprintf(stderr, "%s\n", str(J(startStreamNative)(&env, nullptr, hz, gain, gainHint)).c_str());
     // WAVOUT=file.wav: keep what the "AudioPlayer" hears (16-bit stereo, 44,100 Hz)
     static FILE *wav; static uint32_t wavBytes = 0;
     const char *wavName = getenv("WAVOUT");

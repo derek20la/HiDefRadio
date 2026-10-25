@@ -17,6 +17,9 @@ data class Signal(
     val mode: String,         // service mode, e.g. "MP1", "MP3" ("" = not known yet)
     val am: Boolean,          // 9c: an AM station (no MER; build 18/19: analog AM + blend, no RDS)
     val direct: Boolean,      // 14c: direct sampling (a V3-type dongle on AM): the tuner is bypassed, no tuner gain
+    // Build 32: rtl_tcp on AM - the auto-gain found that the gain changes nothing (the server's
+    // dongle is probably a V3 in direct sampling, which the server can't tell us). gainDb is -1 then.
+    val gainNoEffect: Boolean,
     val offsetHz: Int,        // tuning error nrsc5 measured
     val merLower: Float,      // modulation error ratio (dB) of each sideband, higher = better
     val merUpper: Float,
@@ -229,6 +232,7 @@ data class Signal(
                 mode = str("mode"),
                 am = bool("am"),                                       // 9c
                 direct = bool("direct"),                               // 14c
+                gainNoEffect = bool("gainNoEffect"),                   // build 32
                 offsetHz = float("offsetHz", 0f).toInt(),
                 merLower = float("merLower", 0f),
                 merUpper = float("merUpper", 0f),

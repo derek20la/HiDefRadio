@@ -264,6 +264,18 @@ cu8, 5-byte commands, which it logs with `--trace`):
     IQFILE=krth_cut.cu8 IQSTEP=1 UNMATCHED=hd WAVOUT=usb.wav build/apptest 101100000 2 30
     cmp tcp.wav usb.wav                                                  # identical
 
+**Build 32: a V3 behind the server on AM.** The replay ignores the gain commands, which is
+exactly what a V3 in direct sampling does on AM (the server can't tell us). On AM over
+rtl_tcp the auto-gain now notices it - the tried gains span 20 dB or more and the peaks moved
+less than 6 dB - and treats it like direct sampling (`Gain: no effect`, no watchdog, nothing
+remembered). On FM the replay ignores the gain too, but there the check is never made, so the
+FM runs above stay bit for bit. `GAINHINT=297` gives the auto-gain a remembered gain (29.7 dB)
+to start from:
+
+    python3 rtltcp_replay.py 740-1.cu8 1234 &
+    SOURCE=tcp:127.0.0.1:1234 GAIN=auto GAINHINT=297 IQSTEP=1 UNMATCHED=hd SIGDUMP=10 build/apptest 740000 2 20
+    # auto-gain: the gain has no effect (0.0 ... 29.7 dB tried, peak -8.6 ... -8.3 dBFS) - ...
+
 `--live` sends like a real server (from the moment of connecting, real time, whatever the
 client does); `--speed X`, `--cut-after S` (the server dies after S seconds), `--tuner N
 --gains N` (what the greeting says). `apptest` gets `SOURCE=tcp:host:port`; `build.sh` builds
