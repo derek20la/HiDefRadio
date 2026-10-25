@@ -97,6 +97,44 @@ static void pkt_reset(packet_t* pkt)
     pkt->shape = PACKET_NONE;
 }
 
+// HiDef Radio patch (2026-10-24): HD audio left / right and polarity.
+//
+// What FAAD2 (with nrsc5's HDC patch) hands out for an HDC frame is, compared with the same
+// station's analog FM stereo decoded by the standard (ITU-R BS.450: left = M + S):
+//     FAAD2's left  = -(the true right)      FAAD2's right = -(the true left)
+// i.e. the two channels are swapped AND both inverted - the "mid" (L+R) comes out inverted
+// while the "side" (L-R) is right, which is why it is hard to hear.
+// Measured on 20 Los Angeles FM stations (HiDef Radio's tools/lrcheck: a test signal built
+// from the standard's formula, and two independent FM stereo decoders, ngsoftfm and Gqrx,
+// as the reference for the analog side). On KLOS 95.5 HD1 vs its analog: mono correlation
+// -0.973, side +0.953; after this fix both positive.
+//
+// Where it comes from: nrsc5 passes FAAD2's PCM straight on, so it is in the HDC decoding.
+// HD1 frames are a stereo pair (block type 2) with M/S on some or all scale factor bands.
+// The order also holds in the bands coded as plain left / right: a test decoder that took
+// those bands the other way round matched the analog clearly worse (side correlation 0.733
+// instead of 0.953). So it is the HDC pair's channel order (the first channel is the right)
+// plus an overall sign, not just the sign of the mid channel. HD2+ programs on mono + PS
+// (block types 0 / 1 / 6, AM too) have no analog to compare with; they get the same
+// correction, as HiDef Radio has played them since 2026-10-02.
+//
+// Fixed here, on the 16-bit output, so every program and every nrsc5 user (CLI, WAV, the
+// library API) gets the standard orientation: exact (no rounding), the one value that
+// cannot be negated in 16 bits (-32768) becomes +32767.
+static void hdc_fix_channels(int16_t *pcm, unsigned long samples)
+{
+    unsigned long i;
+
+    for (i = 0; i + 1 < samples; i += 2)
+    {
+        int left = -(int)pcm[i + 1];
+        int right = -(int)pcm[i];
+
+        pcm[i] = (int16_t)(left > INT16_MAX ? INT16_MAX : left);
+        pcm[i + 1] = (int16_t)(right > INT16_MAX ? INT16_MAX : right);
+    }
+}
+
 void output_advance(output_t *st)
 {
     unsigned int program, frame;
@@ -138,6 +176,10 @@ void output_advance(output_t *st)
 
                 if (info.error == 0 && info.samples > 0)
                 {
+                    // HiDef Radio patch (2026-10-24): standard left / right and polarity (above).
+                    // FAAD2's output buffer is rewritten on every call, so it is fixed in place.
+                    if (info.channels == 2)
+                        hdc_fix_channels(buffer, info.samples);
                     nrsc5_report_audio(st->radio, program, buffer, info.samples);
                     produced_audio = 1;
                 }

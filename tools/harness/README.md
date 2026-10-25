@@ -403,3 +403,29 @@ Cost without HD (KKLA, search never resting): HD decode 16.6 % -> 10.0 % of real
 apptest; libnrsc5 alone in pipe mode 171 -> 102 ms of processor time per second of radio.
 With HD (KRTH) decoding is unchanged (77 -> 73 ms/s, within noise).
 
+
+## HD audio left / right (build 28): nrsc5's output.c, before / after
+
+Fix 2 in the fork (`derek20la/nrsc5`, branch `hidef`, commit `894585e`): stock nrsc5 hands out
+its HD audio with left and right swapped and both inverted (`tools/lrcheck/README.md`). Until
+build 27 the app corrected that in `native-lib.cpp` (`fixHdAudio()`); now nrsc5's
+`output_advance()` corrects FAAD2's 16-bit output, exactly as the app did, and the app's
+function is reduced to the station's TX digital audio gain (`applyHdGain()`).
+
+The proof is the same as for the HD search: the harness built from build 27 (old) and from
+build 28 (new), the same recording through both, virtual time, `WAVOUT=`, `cmp` the WAVs and
+`diff` the logs (with the "ms after tuning" times, the CPU-% figures and the column padding
+taken out). Results on 2026-10-24 (x86), **every WAV bit for bit the same and every log the
+same**:
+
+| recording | runs |
+|---|---|
+| KRTH 101.1 (52 s) | Digital only, Auto |
+| KLOS klos1 95.5 (39 s, TX gain +4 dB = the gain path) | Digital only, Auto |
+| KKGO 105.1 (16 s) | Digital only HD1 / HD2 / HD3 / HD4, Auto (HD2 at 5 s, back at 12 s) |
+| KMZT 1260-3 AM (24 s, `UNMATCHED=hd`) | Digital only, Auto |
+
+Exactness: with gain 0 the app now passes nrsc5's samples on untouched; with a gain the app
+used to compute `nrsc5 sample x -10^(dB/20)` and now `(-nrsc5 sample) x 10^(dB/20)`, which is
+the same float product. The only value that could differ is a raw -32768 on a station that
+sends a gain (nrsc5 now turns it into +32767 first) - a full-scale sample; none occurs here.

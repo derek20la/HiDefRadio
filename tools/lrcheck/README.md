@@ -31,8 +31,10 @@ September 2026 its analog decoder was matched to the HD audio coming out of nrsc
 turned out to be the swapped one: with a standard-conforming analog decoder, nrsc5's HD audio
 is `left = -(analog right)`, `right = -(analog left)` on all 20 Los Angeles stations measured.
 A station sends one stereo program on both its analog and its HD side, and HD radios blend
-between them, so the two must agree. The app now decodes the analog per the standard and
-corrects the HD audio where it arrives (`fixHdAudio()` in `native-lib.cpp`).
+between them, so the two must agree. The app now decodes the analog per the standard. The HD
+audio was corrected where it arrived in the app (`fixHdAudio()` in `native-lib.cpp`) until
+build 27; since build 28 our nrsc5 fork does it (`src/output.c`, branch `hidef` of
+github.com/derek20la/nrsc5) - see "nrsc5 itself" below.
 
 One more check that was needed for the polarity: in a KLOS 95.5 recording the station found
 at +400 kHz in the samples is KAIA 95.9 (by its RDS), so the dongle's spectrum is the right
@@ -40,3 +42,20 @@ way up and "carrier up = positive audio" holds.
 
 Why one earbud didn't settle it: on KLOS the left and right channels are 85-87 % alike, so
 a mirrored stereo image is very hard to hear on ordinary music.
+
+## nrsc5 itself (2026-10-24)
+
+The same check on nrsc5's own command-line output (`nrsc5 -r recording.cu8 -o hd1.wav 0`,
+HD1 vs ngsoftfm's analog of the same recording, `compare.py` after a WAV -> float32 step):
+
+| | stock nrsc5 v3.2.0 | our fork, branch `hidef` |
+|---|---|---|
+| KLOS 95.5: mono / side correlation | **-0.973** / +0.953 = swapped + inverted | +0.973 / +0.953, same way round |
+| KRTH 101.1: mono / side correlation | **-0.962** / +0.839 = swapped + inverted | +0.962 / +0.839, same way round |
+
+Where it comes from: nrsc5 hands FAAD2's PCM straight on, so it is in the HDC decoding. FM
+HD1 frames are a stereo pair with M/S stereo on some or all frequency bands; a test decoder
+that took the bands coded as plain left / right the other way round matched the analog
+clearly worse (side 0.733 instead of 0.953), so it is the pair's channel order plus an
+overall sign - not only the sign of the mid channel. The fork corrects the 16-bit output
+once, for every program (`src/output.c`, marked "HiDef Radio patch").

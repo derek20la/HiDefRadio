@@ -110,7 +110,7 @@ The HD audio is never touched.
 
 The aligner also compares the energy of the two streams over the matched stretch, in 10 ms pieces. Pieces where nrsc5 filled in silence (a dropout) are left out, or the analog would look louder than it is. KLOS's analog measured 4 dB louder than its HD.
 
-Before that, the app applies the station's own **digital audio gain**: every HD programme carries a small field (−8 to +7 dB) telling receivers how much to raise or lower the digital audio so that it matches the analog in loudness. nrsc5 reports it but doesn't apply it; `fixHdAudio()` in `native-lib.cpp` does. With it, KLOS's difference went from +4.1 dB to +0.1 dB.
+Before that, the app applies the station's own **digital audio gain**: every HD programme carries a small field (−8 to +7 dB) telling receivers how much to raise or lower the digital audio so that it matches the analog in loudness. nrsc5 reports it but doesn't apply it; `applyHdGain()` in `native-lib.cpp` does. With it, KLOS's difference went from +4.1 dB to +0.1 dB.
 
 Whatever difference is left, the blend corrects on the **analog** side (at most ±12 dB, changing by no more than 2 dB per second), so the HD sounds exactly as it does in "Digital only".
 

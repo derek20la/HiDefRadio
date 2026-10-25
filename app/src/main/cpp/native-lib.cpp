@@ -106,9 +106,10 @@ struct ProgramInfo {
 static const int STEREO_FRAMES = 3;
 
 // Build 21: does this decoded HD frame (16-bit stereo, interleaved) carry stereo? A mono program
-// comes out of FAAD2 with left == right exactly, and fixHdAudio() treats both channels the same,
-// so they stay equal. "Differs" = more than 1 % of the sample pairs apart by more than 8 LSB
-// (-72 dBFS) - far above rounding, far below any real stereo. Silence (zeros) is mono.
+// comes out of FAAD2 with left == right exactly, and nrsc5's left/right fix and applyHdGain()
+// treat both channels the same, so they stay equal. "Differs" = more than 1 % of the sample
+// pairs apart by more than 8 LSB (-72 dBFS) - far above rounding, far below any real stereo.
+// Silence (zeros) is mono.
 static bool countStereoFrame(const int16_t *data, size_t count) {
     size_t pairs = count / 2, apart = 0;
     for (size_t i = 0; i + 1 < count; i += 2) {
@@ -331,7 +332,7 @@ static size_t g_sourceFadeLeft = 0;                       // stereo values still
 // FM standard says. (Checked 2026-10-02: in a KLOS 95.5 recording the station at +400 kHz
 // in the samples is 95.9, so the dongle's spectrum is the right way up and our
 // discriminator's sign is the true one.) Until then this was -0.7, to match nrsc5's HD
-// audio - which turned out to be the inverted one: see fixHdAudio().
+// audio - which turned out to be the inverted one: see applyHdGain().
 static const float FM_OUTPUT_GAIN = 0.7f;
 // Stats for the signal details (written by the streaming thread, read by the UI).
 static std::atomic<float> g_fmCarrierDb{-99.0f};          // level of the filtered FM channel (dB, 0 = full scale)
@@ -618,53 +619,43 @@ static std::atomic<bool> g_hdRestAllowed{true};            // tests only (setHdR
 // but only if it belongs to the selected program (9b). The check happens
 // INSIDE the lock, so after setProgramNative() returns, not a single value
 // of the old program can sneak into the ring.
-// ---- HD audio: left/right and polarity (2026-10-02) -----------------------------------------
-// nrsc5 (v3.2.0 with the FAAD2 "HDC" patch) hands out the HD audio with LEFT AND RIGHT
-// SWAPPED and the polarity inverted, compared with the same station's analog audio decoded
-// the standard way. Measured on 20 Los Angeles stations (every one the same) and re-checked
-// against a second FM stereo decoder (ngsoftfm): nrsc5's left = -(the analog's right),
-// nrsc5's right = -(the analog's left). A station feeds one stereo program to both its
-// analog and its HD side, and a real HD radio blends between the two - so they must agree,
-// and the analog side is the one with a 60-year-old standard behind it.
-// (Until this fix the app had bent its ANALOG audio to match nrsc5 instead, so everything
-// played with left and right exchanged.)
-// Corrected once, here, for every program (HD1, HD2 ..., AM too):
-//     left = -(nrsc5's right)      right = -(nrsc5's left)
+// ---- HD audio: left/right, polarity and the station's TX digital audio gain ------------------
+// Left/right and polarity (2026-10-02, decision 49): stock nrsc5 v3.2.0 (with the FAAD2 "HDC"
+// patch) hands out the HD audio with LEFT AND RIGHT SWAPPED and the polarity inverted,
+// compared with the same station's analog audio decoded the standard way (measured on 20 Los
+// Angeles stations, cross-checked with ngsoftfm and Gqrx - tools/lrcheck): nrsc5's left =
+// -(the analog's right), nrsc5's right = -(the analog's left). A station feeds one stereo
+// program to both sides and a real HD radio blends between them, so they must agree.
+// Until build 28 this function corrected it. Since build 28 OUR nrsc5 does (derek20la/nrsc5,
+// branch hidef, "output: HD audio with standard left / right and polarity", in output.c - the
+// fault is in the HDC decoding, for every program), so the audio arriving here is already
+// the right way round and this function only applies the gain below. The result is bit for
+// bit what build 27 played (tools/harness README, "HD audio left / right").
 //
 // 14a step 2 - the station's "TX digital audio gain": every HD program carries a small
 // number in its audio header, -8 ... +7 dB, "the offset to be applied to the digital audio
 // level at the receiver to equalize the subjective loudness of the digital and analog
 // audio" (NRSC-5, SY_IDD_1017s section 5.2.1.3). nrsc5 reports it (NRSC5_EVENT_AUDIO_SERVICE)
-// but does not apply it - that is the receiver's job, so it is done here as well.
+// but does not apply it - that is the receiver's job, so it is done here.
 // Most stations send 0. KLOS sends +4: its HD1 came out 4.2 dB quieter than its analog
 // until this step (the blend then turned the analog DOWN to match, so KLOS played 4 dB
 // quieter than its neighbours). Survey 2026-10-02: KLOS +4, KSBR +2, KCRW HD2 +6.
 //
 // Called only from the nrsc5 callback (= the streaming thread), so one buffer is enough.
 static std::atomic<int> g_hdGainDb[MAX_PROGRAMS];        // dB per program; 0 = none (static = starts at 0)
-static std::vector<int16_t> g_hdFixed;
-static const int16_t *fixHdAudio(const int16_t *data, size_t count, unsigned program) {
-    g_hdFixed.resize(count);
+static std::vector<int16_t> g_hdGained;
+static const int16_t *applyHdGain(const int16_t *data, size_t count, unsigned program) {
     int db = program < (unsigned)MAX_PROGRAMS ? g_hdGainDb[program].load() : 0;
-    if (db == 0) {
-        // the usual case: exact, no rounding
-        for (size_t i = 0; i + 1 < count; i += 2) {
-            int left = -(int)data[i + 1], right = -(int)data[i];
-            g_hdFixed[i]     = (int16_t)(left  > 32767 ? 32767 : left);    // -(-32768) doesn't fit in 16 bits
-            g_hdFixed[i + 1] = (int16_t)(right > 32767 ? 32767 : right);
-        }
-    } else {
-        // dB -> factor: 10^(dB/20). +6 dB doubles the samples, so clamp (a station that asks
-        // for gain leaves room for it: KLOS's HD1 peaks at -5 dBFS before its +4 dB).
-        float k = -std::pow(10.0f, (float)db / 20.0f);
-        for (size_t i = 0; i + 1 < count; i += 2) {
-            float left = (float)data[i + 1] * k, right = (float)data[i] * k;
-            g_hdFixed[i]     = (int16_t)std::lrintf(left  > 32767.f ? 32767.f : left  < -32768.f ? -32768.f : left);
-            g_hdFixed[i + 1] = (int16_t)std::lrintf(right > 32767.f ? 32767.f : right < -32768.f ? -32768.f : right);
-        }
+    if (db == 0) return data;                       // the usual case: nrsc5's audio exactly as it is
+    // dB -> factor: 10^(dB/20). +6 dB doubles the samples, so clamp (a station that asks
+    // for gain leaves room for it: KLOS's HD1 peaks at -5 dBFS before its +4 dB).
+    g_hdGained.resize(count);
+    float k = std::pow(10.0f, (float)db / 20.0f);
+    for (size_t i = 0; i < count; i++) {
+        float v = (float)data[i] * k;
+        g_hdGained[i] = (int16_t)std::lrintf(v > 32767.f ? 32767.f : v < -32768.f ? -32768.f : v);
     }
-    if (count & 1) g_hdFixed[count - 1] = data[count - 1];             // never happens (stereo), but stay tidy
-    return g_hdFixed.data();
+    return g_hdGained.data();
 }
 
 static void pushAudio(int program, const int16_t *data, size_t count) {
@@ -1085,7 +1076,7 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
                 st.programs[p].onAir = true;
                 st.programs[p].type = (int)evt->audio_service.type;
                 // 14a step 2: the station's TX digital audio gain for this program (see
-                // fixHdAudio). Outside the standard's -8 ... +7 dB = not a real value: ignore.
+                // applyHdGain). Outside the standard's -8 ... +7 dB = not a real value: ignore.
                 int gain = evt->audio_service.digital_audio_gain;
                 if (gain < -8 || gain > 7) gain = 0;
                 if (g_hdGainDb[p].exchange(gain) != gain)
@@ -1142,9 +1133,10 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
             // Real decoded audio (16-bit stereo, 44,100 Hz). nrsc5 decodes ALL
             // programs; each event says which one this audio belongs to.
             if (evt->audio.program < MAX_PROGRAMS) {
-                // Left/right and polarity put right FIRST, so the aligner, the blender and
-                // the player all get the same, corrected audio (see fixHdAudio()).
-                const int16_t *hdAudio = fixHdAudio(evt->audio.data, evt->audio.count, evt->audio.program);
+                // The station's TX digital audio gain applied FIRST, so the aligner, the blender
+                // and the player all get the same audio (see applyHdGain(); left/right and
+                // polarity come right from our nrsc5 since build 28).
+                const int16_t *hdAudio = applyHdGain(evt->audio.data, evt->audio.count, evt->audio.program);
                 ProgramInfo &pi = st.programs[evt->audio.program];
                 if (pi.audioValues == 0)
                     LOGI("First %s audio decoded! %lld ms after tuning",

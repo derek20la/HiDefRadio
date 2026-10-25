@@ -571,9 +571,10 @@ public:
             //   2. ngsoftfm (the SoftFM family) puts that signal on the left, and on a real KLOS
             //      recording its left was our right (L-R correlation -0.996);
             //   3. Gqrx / GNU Radio uses the same sign as ngsoftfm.
-            // So the analog was wrong here, and it is nrsc5's HD audio that arrives with the
-            // channels swapped - that is now corrected where the HD audio comes in
-            // (fixHdAudio() in native-lib.cpp), and the analog follows the standard.
+            // So the analog was wrong here, and it is nrsc5's HD audio that arrived with the
+            // channels swapped - corrected where the HD audio came in (fixHdAudio() in
+            // native-lib.cpp) until build 27, and since build 28 inside our nrsc5 fork
+            // (src/output.c); the analog follows the standard.
             // Lesson: a sign convention needs a reference that is known to be right, not just
             // "the other decoder in the same program".
             float d = audio.secondEnabled() ? mpx * (-2.f * pll.sin2()) : 0.f;
