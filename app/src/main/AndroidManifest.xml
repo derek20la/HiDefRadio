@@ -20,6 +20,11 @@
     <!-- Build 25: to tell whether a VPN is on when the rtl_tcp server can't be reached (a hint in the
          message). A normal permission: granted at install, the app only reads the network's type. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Build 33: Android 17+ blocks every connection to the home network (the rtl_tcp server on a
+         PC or Raspberry Pi) until the listener allows "Nearby devices" (local network). Asked for only
+         when the radio starts with Settings > Source = rtl_tcp, on Android 17 and later (LocalNetwork.kt);
+         older Android versions ignore this line. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <application
         android:allowBackup="true"

@@ -296,7 +296,10 @@ class RadioService : Service() {
                     // stopped while we were connecting: close what was opened, start nothing
                     if (ok) engine.execute { RadioEngine.closeDongleNative() }
                 } else if (!ok) {
-                    problem(report.removePrefix("rtl_tcp: ") + vpnHint())
+                    // Build 33: on Android 17+ without the local network permission the connection
+                    // just gets no answer - say the real reason instead (LocalNetwork.kt).
+                    problem(if (!LocalNetwork.allowed(this)) getString(R.string.tcp_local_network_off)
+                            else report.removePrefix("rtl_tcp: ") + vpnHint())
                     stopEverything()
                 } else if (radioOn) {
                     // (can't happen: one source at a time) - close what we just opened
@@ -1387,7 +1390,9 @@ class RadioService : Service() {
         override fun run() {
             // 1.2: the rtl_tcp server went away (stopped, Wi-Fi gone) - stop and say so.
             if (tcpOpen && !retuning && signal().sourceLost) {
-                problem(getString(R.string.tcp_lost, tcpWhere) + vpnHint())
+                // (Build 33: the local network permission taken away while playing cuts the connection too.)
+                problem(if (!LocalNetwork.allowed(this@RadioService)) getString(R.string.tcp_local_network_off)
+                        else getString(R.string.tcp_lost, tcpWhere) + vpnHint())
                 stopEverything()
                 return
             }

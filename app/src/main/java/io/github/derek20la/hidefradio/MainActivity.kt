@@ -14,6 +14,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -39,6 +40,7 @@ import android.widget.LinearLayout
 import android.widget.TableRow
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -147,6 +149,19 @@ class MainActivity : AppCompatActivity() {
     // changed while we were away, onStart() redraws the screen.
     private var themeShown = ""
     private var welcomeDialog: AlertDialog? = null       // build 7: the welcome card while it is open
+    private var localNetworkDialog: AlertDialog? = null  // build 33: "why we ask" before Android's local network question
+
+    // Build 33: Android's own "Allow HiDef Radio to ...?" question for the local network permission
+    // (Android 17+, rtl_tcp only - see LocalNetwork.kt). Yes -> start the radio; no -> say how to allow it later.
+    private val localNetworkLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                RadioService.lastProblem = ""
+                findAndStartRadio()
+            } else {
+                localNetworkRefused()
+            }
+        }
     // 9h: the status line's normal text colors (it turns amber for "plug in").
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
@@ -317,6 +332,9 @@ class MainActivity : AppCompatActivity() {
         }
         // Build 30: back from Settings with another rotation -> turn the screen now.
         Settings.applyRotation(this)
+        // Build 33: back from Android's app settings with the local network allowed -> drop the old warning.
+        if (LocalNetwork.allowed(this) && RadioService.lastProblem == getString(R.string.tcp_local_network_off))
+            RadioService.lastProblem = ""
         uiHandler.post(statusUpdater)
     }
 
@@ -1965,6 +1983,9 @@ class MainActivity : AppCompatActivity() {
         if (Settings.useTcp(this)) {
             val host = Settings.tcpHost(this)
             if (host.isEmpty()) { showMessage(""); return }       // the status line says "set a server"
+            // Build 33: Android 17+ blocks the home network until the listener allows it - ask first
+            // (a word on why, then Android's question); the answer starts the radio or says how to allow it.
+            if (!LocalNetwork.allowed(this)) { askForLocalNetwork("$host:${Settings.tcpPort(this)}"); return }
             showMessage(getString(R.string.tcp_connecting, "$host:${Settings.tcpPort(this)}"))
             val intent = Intent(this, RadioService::class.java)
                 .setAction(RadioService.ACTION_START)
@@ -1990,6 +2011,40 @@ class MainActivity : AppCompatActivity() {
             showMessage("Found ${describe(device)}. Asking for permission…")
             requestPermission(device)
         }
+    }
+
+    /**
+     * Build 33: before Android's own question (whose wording is about "nearby devices" and can puzzle a
+     * radio listener), one sentence on why: the rtl_tcp server is on your home network, and Android 17
+     * asks before an app may reach it. "Continue" brings Android's question, "Not now" leaves the radio
+     * off with the reason under the station name. (Google's guide: explain, then ask - and after an
+     * explanation Android lets an app ask again even if the first answer was no.)
+     */
+    private fun askForLocalNetwork(where: String) {
+        if (localNetworkDialog?.isShowing == true) return
+        localNetworkDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.local_network_title)
+            .setMessage(getString(R.string.local_network_why, where))
+            .setPositiveButton(R.string.local_network_continue) { _, _ -> localNetworkLauncher.launch(LocalNetwork.PERMISSION) }
+            .setNegativeButton(R.string.local_network_not_now) { _, _ -> localNetworkRefused() }
+            .setOnDismissListener { localNetworkDialog = null }
+            .show()
+    }
+
+    /**
+     * Build 33: no local network access: the radio stays off, the line under the station name says why,
+     * and a bar offers Android's app settings (after two "no"s Android stops asking, and only that page
+     * can turn it on: Permissions > Nearby devices > Allow).
+     */
+    private fun localNetworkRefused() {
+        RadioService.lastProblem = getString(R.string.tcp_local_network_off)
+        showMessage("")
+        Snackbar.make(binding.root, R.string.tcp_local_network_off_short, Snackbar.LENGTH_LONG)
+            .setAction(R.string.open_app_settings) {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null)))
+            }
+            .show()
     }
 
     private fun startRadioService(device: UsbDevice) {

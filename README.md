@@ -61,6 +61,8 @@ No root, no computer, no internet connection needed (a dongle on another compute
 
 Settings → Source → **rtl_tcp server on the network**: the dongle sits on a PC or a Raspberry Pi running `rtl_tcp` (for a V4 it must be the build from the [RTL-SDR Blog drivers](https://github.com/rtlsdrblog/rtl-sdr-blog)), with the antenna wherever reception is best, and the phone gets the samples over Wi-Fi. No OTG cable, and the phone can charge while the radio plays. Everything else works as with a dongle on the phone. It needs a steady 24 Mbit/s (1.49 million sample pairs a second), so use 5 GHz Wi-Fi or a server on a cable; a slower link makes the sound stutter. On the server: `rtl_tcp -a 0.0.0.0` (it listens on port 1234). rtl_tcp has no password and sends to anyone who connects, so keep it on your home network.
 
+**Android 17 and later** ask before an app may connect to anything on your home network. The first time you start the radio with the rtl_tcp source, the app explains why and Android asks to allow **Nearby devices** (local network access); without it the server can't be reached. If you said no, allow it later in Android's settings: Apps > HiDef Radio > Permissions > Nearby devices (since 1.2.1).
+
 If the app says "can't connect … (no answer)":
 - the phone and the server must be on the same network (a guest Wi-Fi keeps devices apart);
 - on Windows, the Wi-Fi must be a **Private** network (`Get-NetConnectionProfile`; change it with `Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private` in an administrator PowerShell), and the firewall must let port 1234 in (`New-NetFirewallRule -DisplayName "rtl_tcp port 1234" -Direction Inbound -Protocol TCP -LocalPort 1234 -Action Allow -Profile Private`);
@@ -70,7 +72,7 @@ Over rtl_tcp the phone no longer powers the dongle: about 194 mA with the screen
 
 ### Private by design
 
-Nothing is collected: no ads, no account, no tracking. Since 1.2 the app has the internet permission, for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
+Nothing is collected: no ads, no account, no tracking. Since 1.2 the app has the internet permission (and on Android 17 and later asks for local network access, "Nearby devices"), for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
 
 ## What you need
 
@@ -207,7 +209,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 - **1.1** (done): analog AM with the blend and C-QUAM AM stereo, NRSC AM de-emphasis, a stereo dot on the frequency display, export / import of favorites.
 - **1.2** (done): an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi; our nrsc5 fork (a faster HD search, the right left / right in HD audio, MER named by its true sideband); a screen rotation setting.
-- **1.2.1** (done): the blend on stations whose analog is processed very differently from their HD (it aligns sooner, stays aligned, and comes back to the HD after a dropout); rtl_tcp on AM: the Gain row says so when the server's dongle ignores the gain (a V3 in direct sampling).
+- **1.2.1** (done): the blend on stations whose analog is processed very differently from their HD (it aligns sooner, stays aligned, and comes back to the HD after a dropout); rtl_tcp on AM: the Gain row says so when the server's dongle ignores the gain (a V3 in direct sampling); rtl_tcp on Android 17: asks for the new local network permission ("Nearby devices"), without which the server can't be reached.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses

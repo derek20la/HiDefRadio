@@ -110,13 +110,21 @@
     <string name="setting_tcp_host">rtl_tcp server</string>
     <string name="setting_tcp_port">rtl_tcp port</string>
     <string name="setting_tcp_host_hint">e.g. 192.168.1.20 or raspberrypi.local</string>
-    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp (from the RTL-SDR Blog drivers for a V4), and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. Takes effect the next time you start the radio.</string>
+    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp (from the RTL-SDR Blog drivers for a V4), and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. On Android 17 and later, Android asks once for \"Nearby devices\" (local network access) the first time you start the radio this way. Takes effect the next time you start the radio.</string>
     <string name="tcp_connecting">Connecting to %1$s…</string>
     <string name="tcp_vpn_hint">A VPN is on - it may be sending this connection elsewhere. Turn it off, or allow LAN access in the VPN app.</string>   <!-- build 25 -->
     <string name="tcp_lost">Lost the connection to the rtl_tcp server at %1$s</string>
     <string name="hint_tcp_server">Source: rtl_tcp server at %1$s</string>
     <string name="hint_tcp_no_host">⚠ Set the rtl_tcp server in Settings &gt; Source</string>
     <string name="hint_tcp_problem">⚠ %1$s</string>
+    <!-- Build 33: Android 17+ local network permission (LocalNetwork.kt) -->
+    <string name="local_network_title">Local network access</string>
+    <string name="local_network_why">Your rtl_tcp server (%1$s) is on your home network, and Android asks before an app may connect to devices there.\n\nHiDef Radio uses this for one thing only: the rtl_tcp server you set. Android lists it under \"Nearby devices\".</string>
+    <string name="local_network_continue">Continue</string>
+    <string name="local_network_not_now">Not now</string>
+    <string name="tcp_local_network_off">Local network access is off, so the rtl_tcp server can\'t be reached. Allow it in Android\'s settings: Apps &gt; HiDef Radio &gt; Permissions &gt; Nearby devices.</string>
+    <string name="tcp_local_network_off_short">Local network access is off</string>
+    <string name="open_app_settings">Settings</string>
     <string name="setting_am_deemph">AM de-emphasis (NRSC)</string>   <!-- build 21 -->
     <string name="setting_am_deemph_help">Takes out the treble boost AM stations add before they transmit, like an AM radio built to the NRSC standard: less hiss, and closer to the HD sound when the blend moves. Turn it off for flat audio (some DXers like the extra treble on weak voices).</string>
     <string name="setting_hd_mismatch">If the HD signal is another station\'s</string>   <!-- 11d: Auto only -->
