@@ -282,6 +282,7 @@ class RadioService : Service() {
     private fun startRadioTcp(host: String, port: Int) {
         tcpConnecting = true
         lastProblem = ""
+        freqHz = loadFrequency(this)            // build 26: show the station from last time while connecting (not 101.1)
         tcpWhere = "$host:$port"
         goForeground(getString(R.string.tcp_connecting, tcpWhere))
         val seq = retuneSeq.get()               // stopRadio() bumps it: "stopped while connecting"
@@ -325,6 +326,16 @@ class RadioService : Service() {
         }
         return if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) " " + getString(R.string.tcp_vpn_hint) else ""
     }
+
+    /**
+     * Nothing to report from the engine right now: a retune is under way, or (build 26) no source
+     * is open yet - while rtl_tcp connects, the service already exists but the engine still holds
+     * the LAST session's station. Found on the phone 10-24: KRRL's name "REAL" (from 92.3, the
+     * session before) landed on the 101.1 HD1 favorite, because the screen saw "101.1 (the
+     * default), station REAL" during the few seconds of connecting.
+     */
+    private val silentNow: Boolean
+        get() = retuning || !radioOn
 
     /** 1.2: tell the listener what went wrong - a message now, and the line on the main screen. */
     private fun problem(text: String) {
@@ -555,7 +566,7 @@ class RadioService : Service() {
 
     /** The programs on the air right now (HD1, HD2, ...), for the buttons. None while retuning (M10b). */
     fun programs(): List<Program> =
-        if (retuning) emptyList() else Program.parseList(RadioEngine.getProgramsNative())
+        if (silentNow) emptyList() else Program.parseList(RadioEngine.getProgramsNative())
 
     /**
      * The program being played: 0 = HD1, 1 = HD2 ...
@@ -701,7 +712,7 @@ class RadioService : Service() {
     }
 
     /** 9d: sync, MER, BER, bit rate, station name... for the now-playing screen. */
-    fun signal(): Signal = if (retuning) Signal.NONE else Signal.parse(RadioEngine.getSignalNative())
+    fun signal(): Signal = if (silentNow) Signal.NONE else Signal.parse(RadioEngine.getSignalNative())
 
     // ------------------------------------------------------------------ pictures (9d step 3)
 
@@ -709,10 +720,10 @@ class RadioService : Service() {
     fun pictureGen(): Int = RadioEngine.getPictureGenNative()
 
     /** [program]'s logo (PNG/JPEG bytes), or null if none has arrived yet. */
-    fun logo(program: Int): ByteArray? = if (retuning) null else RadioEngine.getLogoNative(program)
+    fun logo(program: Int): ByteArray? = if (silentNow) null else RadioEngine.getLogoNative(program)
 
     /** The album art for [program]'s current song, or null. */
-    fun art(program: Int): ByteArray? = if (retuning) null else RadioEngine.getArtNative(program)
+    fun art(program: Int): ByteArray? = if (silentNow) null else RadioEngine.getArtNative(program)
 
     // The pictureGen() we last saved logos for (-1 = never).
     private var savedPictureGen = -1
