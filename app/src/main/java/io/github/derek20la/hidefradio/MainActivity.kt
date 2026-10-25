@@ -225,6 +225,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         Settings.applyBlack(this)                        // 9h: true black
         themeShown = Settings.theme(this)
+        Settings.applyRotation(this)                     // build 30: Settings -> Display -> Rotation
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -314,6 +315,8 @@ class MainActivity : AppCompatActivity() {
             recreate()
             return
         }
+        // Build 30: back from Settings with another rotation -> turn the screen now.
+        Settings.applyRotation(this)
         uiHandler.post(statusUpdater)
     }
 

@@ -164,6 +164,16 @@
             app:key="theme"
             app:title="@string/setting_theme"
             app:useSimpleSummaryProvider="true" />
+
+        <!-- Build 30: which way up the screen is drawn (Settings.applyRotation).
+             "Follow the phone" = as before this setting existed. -->
+        <ListPreference
+            app:defaultValue="system"
+            app:entries="@array/rotation_names"
+            app:entryValues="@array/rotation_keys"
+            app:key="rotation"
+            app:title="@string/setting_rotation"
+            app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 
     <!-- 13a step 2: what the app has saved by itself (station logos, the gain

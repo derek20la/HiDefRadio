@@ -74,6 +74,7 @@
     <string name="settings_audio">Audio</string>
     <string name="settings_display">Display</string>                  <!-- 9h -->
     <string name="setting_theme">Theme</string>
+    <string name="setting_rotation">Rotation</string>                  <!-- build 30 -->
     <string name="setting_gain">Tuner gain</string>
     <string name="gain_auto">Auto (recommended)</string>
     <string name="setting_gain_help">Auto measures the signal when you tune, keeps adjusting while you listen, and remembers what worked for each station. With a manual gain, open the signal details and keep Peak below about −3 dBFS; higher MER is better.</string>
@@ -319,6 +320,18 @@
         <item>light</item>
         <item>dark</item>
         <item>black</item>
+    </string-array>
+
+    <!-- Build 30: Settings -> Display -> Rotation (Settings.applyRotation) -->
+    <string-array name="rotation_names">
+        <item>Follow the phone</item>
+        <item>Portrait</item>
+        <item>Landscape (either way up)</item>
+    </string-array>
+    <string-array name="rotation_keys" translatable="false">
+        <item>system</item>
+        <item>portrait</item>
+        <item>landscape</item>
     </string-array>
 
     <!-- 9j: Settings -> Audio -> Physical media buttons -->

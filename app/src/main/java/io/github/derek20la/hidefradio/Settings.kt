@@ -1,6 +1,7 @@
 package io.github.derek20la.hidefradio
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
@@ -24,6 +25,7 @@ object Settings {
     const val KEY_HD_MODE = "hd_mode"    // M11: HD_DIGITAL / HD_ANALOG / HD_AUTO (11d)
     const val KEY_HD_MISMATCH = "hd_mismatch"   // 11d: MISMATCH_HD / MISMATCH_ANALOG
     const val KEY_THEME = "theme"        // 9h: THEME_SYSTEM / THEME_LIGHT / THEME_DARK / THEME_BLACK
+    const val KEY_ROTATION = "rotation"  // build 30: ROTATION_SYSTEM / ROTATION_PORTRAIT / ROTATION_LANDSCAPE
     const val KEY_MEDIA_BUTTONS = "media_buttons"   // 9j: BUTTONS_ALL / BUTTONS_PLAY_PAUSE / BUTTONS_NONE
     const val KEY_FM_STEREO = "fm_stereo"   // 11b step 2: STEREO_AUTO / STEREO_MONO / STEREO_FULL
                                             // (build 19: serves FM stereo AND C-QUAM AM stereo; the key keeps its old name
@@ -56,6 +58,11 @@ object Settings {
     const val THEME_LIGHT = "light"
     const val THEME_DARK = "dark"
     const val THEME_BLACK = "black"
+
+    // Build 30: which way up the screen is drawn (Settings -> Display -> Rotation).
+    const val ROTATION_SYSTEM = "system"         // like every other app: the phone's auto-rotate decides (default)
+    const val ROTATION_PORTRAIT = "portrait"     // always upright
+    const val ROTATION_LANDSCAPE = "landscape"   // always sideways, either way up (e.g. a car mount)
 
     // M11: what to listen to. The values RadioEngine.setAudioSourceNative() takes:
     const val HD_DIGITAL = "digital"     // the HD Radio audio only
@@ -183,6 +190,30 @@ object Settings {
 
     fun theme(context: Context): String =
         prefs(context).getString(KEY_THEME, THEME_SYSTEM) ?: THEME_SYSTEM
+
+    fun rotation(context: Context): String =
+        prefs(context).getString(KEY_ROTATION, ROTATION_SYSTEM) ?: ROTATION_SYSTEM
+
+    /**
+     * Build 30: turn the screen the way Settings -> Display -> Rotation says. Call it in
+     * onCreate() of every screen (and again when coming back from the settings). Asking for
+     * the orientation the screen already has does nothing, so calling it often is harmless.
+     * - Follow the phone: UNSPECIFIED, what the app did before this setting existed - the
+     *   phone's own auto-rotate switch (and its rotation lock) decide.
+     * - Portrait: upright only (a tablet may also turn it upside down).
+     * - Landscape: SENSOR_LANDSCAPE = sideways, and it flips to the other side when you turn
+     *   the phone over - so it works in a car mount whichever way the phone sits. It follows
+     *   the motion sensor even when the phone's rotation lock is on.
+     * The radio itself keeps playing when the screen turns (it runs in RadioService).
+     */
+    fun applyRotation(activity: Activity) {
+        val wanted = when (rotation(activity)) {
+            ROTATION_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            ROTATION_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        if (activity.requestedOrientation != wanted) activity.requestedOrientation = wanted
+    }
 
     /**
      * 9h: tell Android whether the app is light or dark. Call it BEFORE

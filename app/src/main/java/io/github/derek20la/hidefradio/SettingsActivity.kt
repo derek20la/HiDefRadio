@@ -44,14 +44,17 @@ class SettingsActivity : AppCompatActivity() {
     // 9h: Theme changed -> redraw this screen in the new look. (Light <-> dark
     // AppCompat redraws by itself; dark gray <-> true black we do here.)
     // MainActivity notices by itself when you go back (onStart).
+    // Build 30: Rotation changed -> turn this screen at once, so you see the choice work.
     private val themeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Settings.KEY_THEME && !Settings.applyNightMode(this)) recreate()
+        if (key == Settings.KEY_ROTATION) Settings.applyRotation(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Settings.applyNightMode(this)                     // 9h: light / dark
         super.onCreate(savedInstanceState)
         Settings.applyBlack(this)                         // 9h: true black
+        Settings.applyRotation(this)                      // build 30: Settings -> Display -> Rotation
         val binding = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
         Settings.styleSystemBars(this)                    // 9h
