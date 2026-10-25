@@ -1012,17 +1012,16 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
             LOGI("LOST SYNC");
             break;
         case NRSC5_EVENT_MER:
-            // 9b: in FM, nrsc5 mirrors the spectrum before decoding (acquire.c,
-            // cq15_to_cf_conj), so what it calls "lower" is really the sideband
-            // ABOVE the carrier, and "upper" is really below. Swap them back.
-            // (AM is not mirrored -> keep as is.)
-            if (g_mode == NRSC5_MODE_FM) {
-                st.merLower = evt->mer.upper;
-                st.merUpper = evt->mer.lower;
-            } else {
-                st.merLower = evt->mer.lower;
-                st.merUpper = evt->mer.upper;
-            }
+            // MER of each HD sideband, in dB: "lower" = below the carrier, "upper" = above.
+            // History: in FM, nrsc5 mirrors the spectrum before decoding (acquire.c,
+            // cq15_to_cf_conj), and stock nrsc5 v3.2.0 named the sidebands after the
+            // mirrored spectrum - its "lower" was really the sideband ABOVE the carrier.
+            // From 9b (2026-10-02) to build 28 this code swapped them back. Since build 29
+            // our nrsc5 (derek20la/nrsc5, branch hidef, sync.c) reports the true sides
+            // itself, so they are taken as they come - same figures on screen as before.
+            // (AM sends no MER event at all; it was never mirrored anyway.)
+            st.merLower = evt->mer.lower;
+            st.merUpper = evt->mer.upper;
             st.merCount++;          // M10c step 2: tells the gain watchdog "a NEW reading"
             break;
         case NRSC5_EVENT_BER:

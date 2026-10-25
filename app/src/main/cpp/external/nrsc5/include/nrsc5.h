@@ -421,8 +421,8 @@ struct nrsc5_event_t
             float cber;
         } ber;
         struct {
-            float lower;
-            float upper;
+            float lower;       /**< MER (dB) of the sideband below the carrier (HiDef Radio patch 2026-10-24: true side, see sync.c) */
+            float upper;       /**< MER (dB) of the sideband above the carrier */
         } mer;
         struct {
             unsigned int program;

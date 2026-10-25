@@ -429,3 +429,30 @@ Exactness: with gain 0 the app now passes nrsc5's samples on untouched; with a g
 used to compute `nrsc5 sample x -10^(dB/20)` and now `(-nrsc5 sample) x 10^(dB/20)`, which is
 the same float product. The only value that could differ is a raw -32768 on a station that
 sends a gain (nrsc5 now turns it into +32767 first) - a full-scale sample; none occurs here.
+
+
+## MER sideband labels (build 29): nrsc5's sync.c, before / after
+
+Fix 3 in the fork (`derek20la/nrsc5`, branch `hidef`, commit `16e6142`): in FM, nrsc5 mirrors
+the spectrum before decoding (`acquire.c`, `cq15_to_cf_conj`), and stock nrsc5 v3.2.0 named
+the two HD sidebands after the mirrored spectrum - its MER event's "lower" was the sideband
+ABOVE the carrier. From 9b (2026-10-02) to build 28 the app swapped the two values back in
+`native-lib.cpp`; now nrsc5's `sync_process_fm()` reports them the right way round
+(lower = below the carrier, upper = above) and the app takes them as they come. AM sends no
+MER event, so it is not affected.
+
+The proof: the harness built from build 28 (old) and from build 29 (new), each with the same
+sandbox-only probe line after the MER event (it printed nrsc5's two values and the app's two,
+as exact hex floats - not part of the app), virtual time, `WAVOUT=`, `cmp` / `diff`.
+Results on 2026-10-24 (x86), 10 runs, Digital only and Auto on each of KRTH 101.1, KLOS klos1
+95.5, KKGO 105.1 (HD2 at 5 s, back at 12 s), KYSR 98.7 and KGGI kkgi2 99.1 (weak, very
+uneven sidebands: 8.1 / 2.0 dB): **every MER figure the app shows bit for bit the same (108
+readings per mode, 216 in all), nrsc5's raw values exactly swapped, every WAV and every log the same** (logs
+with the times, the CPU-% figures, the column padding and two start-up lines from two threads
+taken out).
+
+Which side is which, checked directly: KYSR with +129..+199 kHz deleted from the recording
+(a block FFT, `numpy`): stock nrsc5 said "lower -13.9, upper 13.1" - the dead sideband named
+"lower"; the fork says "lower 13.1, upper -13.9". With -199..-129 kHz deleted the fork's
+"lower" collapses (-16.1 / 9.8). The app's screen showed the dead sideband as "upper" in both
+builds.

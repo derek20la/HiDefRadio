@@ -615,7 +615,18 @@ void sync_process_fm(sync_t *st)
             float mer_db_lb = 10 * log10f(signal / st->error_lb);
             float mer_db_ub = 10 * log10f(signal / st->error_ub);
 
-            nrsc5_report_mer(st->input->radio, mer_db_lb, mer_db_ub);
+            // HiDef Radio patch (2026-10-24): report the sidebands by their true side of the
+            // carrier. In FM, acquire.c conjugates the input (cq15_to_cf_conj), which mirrors
+            // the spectrum: the bins this file calls "lb" (from LB_START) carry the sideband
+            // ABOVE the carrier on air, and "ub" (up to UB_END) the one below. The names
+            // inside the decoder stay as they are (they follow the mirrored spectrum the rest
+            // of nrsc5 works in); only the reported values are swapped, so the MER event's
+            // "lower" is the sideband below the carrier and "upper" the one above, as a
+            // spectrum display shows them. Checked on a recording with the band +129..+199 kHz
+            // deleted: before, "lower" collapsed; with this, "upper" does.
+            // AM sends no MER event, so only FM is affected. The numbers themselves are the
+            // same as before, bit for bit - only which field holds which.
+            nrsc5_report_mer(st->input->radio, mer_db_ub, mer_db_lb);
 
             st->mer_cnt = 0;
             st->error_lb = 0;
