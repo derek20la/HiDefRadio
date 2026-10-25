@@ -1,11 +1,12 @@
 #!/bin/sh
 # Builds the desktop harness: the app's whole native engine (native-lib.cpp) playing a .cu8
-# recording on a PC (Linux / macOS; needs git, cmake, gcc, clang++ and a JDK for jni.h).
+# recording on a PC (Linux / macOS; needs cmake, gcc, clang++ and a JDK for jni.h).
 #
 #   cd tools/harness && sh build.sh
 #
-# Everything it downloads or builds goes into ./build (ignored by git). The app's own files
-# are copied from app/src/main/cpp, so the harness always runs the code that is in the repo.
+# Everything it builds goes into ./build (ignored by git). The app's own files - and the
+# vendored nrsc5, FAAD2 and librtlsdr - are copied from app/src/main/cpp, so the harness
+# always runs the code that is in the repo.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 APP=${APP:-$HERE/../../app/src/main/cpp}
@@ -13,9 +14,16 @@ mkdir -p "$HERE/build" && cd "$HERE/build"
 cp "$APP"/native-lib.cpp "$APP"/*.hpp .
 mkdir -p cfg && cp "$APP/nrsc5-config/config.h" cfg/
 cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/searchtest.cpp" "$HERE/mkhdgap.cpp" "$HERE/mkcochannel.cpp" "$HERE/identtest.cpp" "$HERE/amtest.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
-[ -d nrsc5 ] || git clone --depth 1 --branch v3.2.0 https://github.com/theori-io/nrsc5.git
-[ -d rtl-sdr-blog ] || git clone --depth 1 https://github.com/rtlsdrblog/rtl-sdr-blog.git
-[ -d faad2 ] || { git clone --depth 1 --branch 2.11.2 https://github.com/knik0/faad2.git; (cd faad2 && patch -p1 < ../nrsc5/support/faad2-hdc-support.patch); }
+# nrsc5, rtl-sdr-blog and FAAD2 come from the APP's vendored copies (app/src/main/cpp/external),
+# not from GitHub, so the harness runs exactly the decoder the app ships - including the
+# HiDef Radio patches to nrsc5 (2026-10-24: the faster HD search in sync.c). nrsc5 is
+# re-copied on every build so a changed sync.c is picked up; FAAD2 (already carrying nrsc5's
+# HDC patch) only once, because its CMake build is slow. NRSC5_SRC=<dir> builds another
+# nrsc5 tree instead (e.g. an unpatched v3.2.0 clone, for before / after comparisons).
+NRSC5_SRC=${NRSC5_SRC:-$APP/external/nrsc5}
+rm -rf nrsc5 && cp -r "$NRSC5_SRC" nrsc5
+[ -d rtl-sdr-blog ] || cp -r "$APP/external/rtl-sdr-blog" rtl-sdr-blog
+[ -d faad2 ] || cp -r "$APP/external/faad2" faad2
 (mkdir -p faad2/build && cd faad2/build && cmake -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DCMAKE_BUILD_TYPE=Release .. >/dev/null && make faad_hdc)
 mkdir -p shim obj stub/android && cp fftw3.h shim/
 printf '#pragma once\n#include <stdio.h>\n#define ANDROID_LOG_DEBUG 3\n#define ANDROID_LOG_INFO 4\n#define ANDROID_LOG_WARN 5\n#define ANDROID_LOG_ERROR 6\n#define __android_log_print(prio, tag, ...) (fprintf(stderr, __VA_ARGS__), fprintf(stderr, "\\n"))\n' > stub/android/log.h

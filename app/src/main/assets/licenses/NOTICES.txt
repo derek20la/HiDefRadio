@@ -16,6 +16,7 @@ BUILT-IN LIBRARIES
 nrsc5 v3.2.0 — the HD Radio (NRSC-5) decoder
 https://github.com/theori-io/nrsc5
 License: GNU GPL version 3 or later
+Changed for HiDef Radio: a faster HD search (src/sync.c, marked "HiDef Radio patch" in the source). The changed version: https://github.com/derek20la/nrsc5, branch hidef, commit 48399a0525c06fc0be6967c9a37da2bc96c50ebf.
 
 librtlsdr (RTL-SDR Blog fork) — talks to the RTL-SDR dongle
 Copyright (C) 2012-2014 Steve Markgraf, Dimitri Stolnikov, and others

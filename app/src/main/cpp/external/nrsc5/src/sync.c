@@ -129,6 +129,124 @@ static void adjust_ref(sync_t *st, unsigned int ref, int cfo)
     }
 }
 
+// ---- HiDef Radio patch (2026-10-24): a faster HD search ---------------------------------------
+// While nrsc5 has no sync, detect_cfo() below runs the Costas loop of adjust_ref() for 76
+// candidate frequency offsets x 22 reference carriers x 32 symbols per block - 53,504 loop
+// steps per 93 ms block, each with two cexpf() and one cargf(), plus one cexpf() per step in
+// reset_ref(): about 1.7 million C-library sin/cos/atan calls a second. On a phone that made
+// the SEARCH cost 3.5x the DECODING (129.6 against 36.1 ms of processor time per second of
+// radio, Moto G Stylus 2024, build 14). Once in sync, adjust_ref() runs 22 times per block and
+// costs nothing worth saving.
+//
+// So the search gets its own copy of the loop, adjust_ref_search(): the same arithmetic in the
+// same order, but the sine / cosine come from an 8,192-entry table with linear interpolation
+// (largest error 7e-8, the size of one float rounding step) and the arc tangent from a
+// degree-15 polynomial (largest error 1.2e-7 rad, the same polynomial the app's FM
+// demodulator uses). The rotated symbols go into a scratch array instead of st->buffer, so
+// reset_ref() is not needed at all (the old code rotated the buffer and rotated it back,
+// leaving a little rounding noise behind each time). The complex products are written out in
+// real arithmetic, so the compiler does not call its NaN-safe __mulsc3 helper for each one.
+// The Costas state (costas_freq / costas_phase) is updated exactly as before, so what the
+// search leaves behind for the fine-sync loop is the same kind of state as before.
+//
+// What this changes: the search's decisions (which offset, which carrier spacing) come from
+// thresholded bits, and the approximations are at float-rounding level, so they come out the
+// same on every recording tried; the fine-sync path (adjust_ref itself) is untouched. The
+// exact float values differ by ~1e-7, so the decoder is not bit-for-bit the same as v3.2.0
+// during the first block after a sync - the test is "same SYNC / LOST SYNC times, same HD
+// audio" on real recordings, in HiDef Radio's tools/harness.
+#define HIDEF_SIN_N 8192                                  // table entries over one turn (32 KB)
+static float hidef_sin_tab[HIDEF_SIN_N + 1];
+static int hidef_sin_ready = 0;
+
+static void hidef_sin_init(void)
+{
+    for (int i = 0; i <= HIDEF_SIN_N; i++)
+        hidef_sin_tab[i] = (float)sin(2.0 * M_PI * i / HIDEF_SIN_N);
+    hidef_sin_ready = 1;
+}
+
+// cos(ph) and sin(ph) by table + linear interpolation; ph may be any size (the search's
+// Costas phase can grow to thousands of radians for the far-off candidates, as in v3.2.0).
+static inline void hidef_cossin(float ph, float *c, float *s)
+{
+    double t = (double)ph * (HIDEF_SIN_N / (2.0 * M_PI));
+    double f = floor(t);
+    int i = (int)((long long)f & (HIDEF_SIN_N - 1));
+    float r = (float)(t - f);
+    int j = (i + HIDEF_SIN_N / 4) & (HIDEF_SIN_N - 1);
+    *s = hidef_sin_tab[i] + (hidef_sin_tab[i + 1] - hidef_sin_tab[i]) * r;
+    *c = hidef_sin_tab[j] + (hidef_sin_tab[j + 1] - hidef_sin_tab[j]) * r;
+}
+
+// atan2 by a polynomial (same coefficients as vec::atan2 in the app's vec4.hpp).
+static inline float hidef_atan2(float y, float x)
+{
+    float ax = fabsf(x), ay = fabsf(y);
+    float mn = ax < ay ? ax : ay, mx = ax < ay ? ay : ax;
+    float t = mn / (mx > 1e-30f ? mx : 1e-30f);                 // 0..1
+    float r = t * t;
+    float p = -4.054363351e-03f;
+    p = p * r + 2.186219394e-02f;
+    p = p * r - 5.591116846e-02f;
+    p = p * r + 9.642106295e-02f;
+    p = p * r - 1.390859038e-01f;
+    p = p * r + 1.994655728e-01f;
+    p = p * r - 3.332985938e-01f;
+    p = p * r + 9.999993443e-01f;
+    float a = p * t;                                             // 0 .. pi/4
+    if (ay > ax) a = 1.57079637f - a;
+    if (x < 0) a = 3.14159274f - a;
+    return y < 0 ? -a : a;
+}
+
+// The search's copy of adjust_ref(): same loop, table-driven, rotated symbols into out[].
+static void adjust_ref_search(sync_t *st, unsigned int ref, int cfo, float complex *out)
+{
+    unsigned int n;
+    float cfo_freq = 2 * M_PI * cfo * CP_FM / FFT_FM;
+
+    // differentially-encoded sync & parity bits (same as in adjust_ref)
+    static const signed char sync[] = {
+        -1, 1, -1, -1, -1, 1, 1, 0, 1, -1, 0, 0, 0, -1, -1, 0,
+        0, 0, 0, 0, -1, 1, -1, 0, 0, 0, 0, 0, 0, 0, 0, -1
+    };
+
+    float freq = st->costas_freq[ref], phase = st->costas_phase[ref];
+    for (n = 0; n < BLKSZ; n++)
+    {
+        float c, s, re = crealf(st->buffer[ref][n]), im = cimagf(st->buffer[ref][n]);
+        hidef_cossin(phase, &c, &s);
+        float rre = re * c + im * s, rim = im * c - re * s;      // buffer * e^(-i phase)
+        // error = carg(buffer^2 e^(-2i phase)) / 2 = carg((buffer e^(-i phase))^2) / 2
+        float error = hidef_atan2(2.f * rre * rim, rre * rre - rim * rim) * 0.5f;
+
+        out[n] = CMPLXF(rre, rim);
+
+        freq += st->beta * error;
+        if (freq > 0.5) freq = 0.5;
+        if (freq < -0.5) freq = -0.5;
+        phase += freq + cfo_freq + (st->alpha * error);
+        if (phase > M_PI) phase -= 2 * M_PI;
+        if (phase < -M_PI) phase += 2 * M_PI;
+    }
+    st->costas_freq[ref] = freq;
+
+    // compare to sync & parity bits
+    float x = 0;
+    for (n = 0; n < BLKSZ; n++)
+        x += crealf(out[n]) * sync[n];
+    if (x < 0)
+    {
+        for (n = 0; n < BLKSZ; n++)
+            out[n] = -out[n];
+        phase += M_PI;
+    }
+    st->costas_phase[ref] = phase;
+}
+// ---- end of the HiDef Radio patch helpers ---------------------------------------------------
+
+static void reset_ref(sync_t *st, unsigned int ref) __attribute__((unused));
 static void reset_ref(sync_t *st, unsigned int ref)
 {
     for (unsigned int n = 0; n < BLKSZ; n++)
@@ -185,7 +303,9 @@ static int decode_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid, unsign
     return 0;
 }
 
-static int find_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid)
+// HiDef Radio patch (2026-10-24): takes the symbols as an array (the search hands it a
+// scratch copy instead of st->buffer[ref]); the logic is unchanged.
+static int find_ref_fm(const float complex *buf, unsigned int rsid)
 {
     signed char needle[] = {
         0, 1, 0, 0, 0, 1, 1, -1, 1, 0, rsid >> 1, (rsid >> 1) ^ (rsid & 1), -1, 0, 0, -1,
@@ -194,7 +314,7 @@ static int find_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid)
     unsigned char data[BLKSZ];
 
     for (int n = 0; n < BLKSZ; n++)
-        data[n] = crealf(st->buffer[ref][n]) <= 0 ? 0 : 1;
+        data[n] = crealf(buf[n]) <= 0 ? 0 : 1;
 
     int match = fuzzy_match(needle, sizeof(needle), data, BLKSZ);
     if (match >= 0)
@@ -300,17 +420,19 @@ void detect_cfo(sync_t *st)
 
         memset(offset_count, 0, BLKSZ * sizeof(unsigned int));
 
+        // HiDef Radio patch (2026-10-24): the table-driven loop writes the rotated symbols
+        // into `ref_syms` and leaves st->buffer alone, so no reset_ref() is needed. This loop
+        // is nearly the whole cost of the HD search (see the note above adjust_ref_search).
+        float complex ref_syms[BLKSZ];
         for (int i = 0; i <= PM_PARTITIONS; i++)
         {
-            adjust_ref(st, cfo + LB_START + i * PARTITION_WIDTH_FM, cfo);
-            offset = find_ref_fm(st, cfo + LB_START + i * PARTITION_WIDTH_FM, (MIDDLE_REF_SC-i) & 0x3);
-            reset_ref(st, cfo + LB_START + i * PARTITION_WIDTH_FM);
+            adjust_ref_search(st, cfo + LB_START + i * PARTITION_WIDTH_FM, cfo, ref_syms);
+            offset = find_ref_fm(ref_syms, (MIDDLE_REF_SC-i) & 0x3);
             if (offset >= 0)
                 offset_count[offset]++;
 
-            adjust_ref(st, cfo + UB_END - i * PARTITION_WIDTH_FM, cfo);
-            offset = find_ref_fm(st, cfo + UB_END - i * PARTITION_WIDTH_FM, (MIDDLE_REF_SC-i) & 0x3);
-            reset_ref(st, cfo + UB_END - i * PARTITION_WIDTH_FM);
+            adjust_ref_search(st, cfo + UB_END - i * PARTITION_WIDTH_FM, cfo, ref_syms);
+            offset = find_ref_fm(ref_syms, (MIDDLE_REF_SC-i) & 0x3);
             if (offset >= 0)
                 offset_count[offset]++;
         }
@@ -837,5 +959,7 @@ void sync_init(sync_t *st, input_t *input)
     st->beta = (4 * loop_bw * loop_bw) / denom;
 
     st->input = input;
+    if (!hidef_sin_ready)          // HiDef Radio patch (2026-10-24): the search's sine table
+        hidef_sin_init();
     sync_reset(st);
 }

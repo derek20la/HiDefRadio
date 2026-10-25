@@ -6,7 +6,7 @@ no phone, no dongle. It is how every DSP step of HiDef Radio was tested, and it 
 example of driving the engine outside Android.
 
     cd tools/harness
-    sh build.sh                      # Linux / macOS: git, cmake, gcc, clang++, a JDK (for jni.h)
+    sh build.sh                      # Linux / macOS: cmake, gcc, clang++, a JDK (for jni.h)
     IQFILE=klos.cu8 IQPACE=1 WAVOUT=out.wav build/apptest 95500000 2 34
 
 - `IQFILE`  a `.cu8` recording at 1,488,375 samples/s - exactly what `nrsc5 -w file.cu8 95.5 0` writes.
@@ -78,7 +78,10 @@ line's "whole harness" figure includes the test's own work.
 
 How it works: `rtl_stub.c` is a fake librtlsdr that "receives" the file, `fftw3.h` is a tiny
 stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI functions with a
-fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are downloaded into `build/`.
+fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are copied into `build/` from the app's
+vendored copies (`app/src/main/cpp/external`), so the harness runs exactly the decoder the app
+ships, HiDef Radio's nrsc5 patches included (until build 26 it downloaded them from GitHub).
+`NRSC5_SRC=<dir>` builds another nrsc5 tree instead - see "The faster HD search" below.
 
 `blendtest` (`build/blendtest`) tests `blend.hpp` alone with made-up audio.
 
@@ -361,7 +364,7 @@ with every header, and the stand-alone tests, three ways - clang++ and g++ on th
 for 64-bit ARM (the phone's code path with NEON; needs `pip install ziglang`) - without debug
 information, and prints a SHA-256 for each object file.
 
-    sh build.sh                      # once (fetches the nrsc5 / librtlsdr headers)
+    sh build.sh                      # once (copies the nrsc5 / librtlsdr headers into build/)
     sh objcheck.sh > before.txt      # on the old sources
     ... edit ...
     sh objcheck.sh > after.txt && diff before.txt after.txt && echo IDENTICAL
@@ -369,3 +372,34 @@ information, and prints a SHA-256 for each object file.
 Comments that move code to other lines don't show up (no line numbers in the objects); a
 change of one digit in a constant does (tried: `PILOT_OFF` 0.012 -> 0.013 changes all three
 `native-lib.o`).
+
+## The faster HD search (build 27): nrsc5's sync.c, before / after with NRSC5_SRC
+
+Build 27 is the first build with a patched nrsc5: our fork `derek20la/nrsc5`, branch `hidef`
+(v3.2.0 + one commit per fix). Fix 1 is the HD search: while nrsc5 has no sync,
+`detect_cfo()` in `sync.c` ran 76 trial frequency offsets x 22 reference carriers x 32
+symbols per block, each step with two `cexpf()` and a `cargf()` - about 1.7 million libm
+calls a second. The search now uses its own copy of the loop (`adjust_ref_search()`): a sine
+table and a polynomial arc tangent, the same arithmetic in the same order. Every spot is
+marked `HiDef Radio patch (2026-10-24)` in the source.
+
+To compare with stock nrsc5, build a second harness from an unpatched v3.2.0 tree:
+
+    git clone --branch v3.2.0 https://github.com/theori-io/nrsc5.git /tmp/nrsc5_orig
+    cp -r ../harness ../harness_old && cd ../harness_old
+    NRSC5_SRC=/tmp/nrsc5_orig sh build.sh
+
+and run the same command with both `build/apptest`s (virtual time, `WAVOUT=`, then `cmp` the
+WAVs and `diff` the logs with the "ms after tuning" and CPU-% figures taken out).
+
+Results on 2026-10-24 (x86, virtual time; 33 runs, Digital only and Auto on every file):
+**the same SYNC / LOST SYNC sequence, the same frequency offsets and the audio bit for bit
+the same** on KRTH, KOST (5 syncs / 4 losses), KLOS, KKGO (HD2 and back), KGB, KPBS, KGGI
+(weak), KYSR, KLLI (3 / 2), the marginal 94.9 / KYMI (16 / 15) / KWIZ (9 / 8), KKLA (no HD),
+KMZT 1260 AM, plus `HDREST=off` and "play the HD anyway" runs. The only log differences are
+the order of two start-up lines (two threads) and the "synced" grace period, which runs on
+the real clock: the same old binary gives different values from run to run there.
+Cost without HD (KKLA, search never resting): HD decode 16.6 % -> 10.0 % of real time in
+apptest; libnrsc5 alone in pipe mode 171 -> 102 ms of processor time per second of radio.
+With HD (KRTH) decoding is unchanged (77 -> 73 ms/s, within noise).
+

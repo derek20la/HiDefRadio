@@ -214,7 +214,7 @@ HiDef Radio stands on the shoulders of these projects:
 
 | Component | What it does | License |
 |---|---|---|
-| [nrsc5](https://github.com/theori-io/nrsc5) v3.2.0 | HD Radio decoder | GPL-3.0-or-later |
+| [nrsc5](https://github.com/theori-io/nrsc5) v3.2.0 + HiDef Radio patches ([derek20la/nrsc5](https://github.com/derek20la/nrsc5/tree/hidef) @ [`48399a0`](https://github.com/derek20la/nrsc5/commit/48399a0525c06fc0be6967c9a37da2bc96c50ebf)) | HD Radio decoder | GPL-3.0-or-later |
 | [librtlsdr, RTL-SDR Blog fork](https://github.com/rtlsdrblog/rtl-sdr-blog) | Dongle driver (V4 support) | GPL-2.0-or-later |
 | [libusb](https://libusb.info) 1.0.30 | USB access | LGPL-2.1-or-later |
 | [FFTW](https://www.fftw.org) 3.3.10 | Fast Fourier transforms | GPL-2.0-or-later |
@@ -227,7 +227,7 @@ HiDef Radio stands on the shoulders of these projects:
 - **Changes to bundled code:**
   - librtlsdr: added `rtlsdr_open_fd()`, so the dongle can be opened with the file descriptor Android gives the app. These changes are marked "HiDef Radio patch".
   - FAAD2: nrsc5's `faad2-hdc-support.patch` is applied.
-  - nrsc5 is unmodified. One thing to know if you use it yourself: its HD audio comes out with left and right swapped and the polarity inverted, compared with the same station's analog audio decoded per the FM stereo standard (measured on 20 Los Angeles stations). HiDef Radio corrects that where the audio arrives (`fixHdAudio()` in `native-lib.cpp`); see `tools/lrcheck/README.md`.
+  - nrsc5: our fork [derek20la/nrsc5](https://github.com/derek20la/nrsc5/tree/hidef), branch `hidef` = v3.2.0 + one commit per fix, vendored at commit [`48399a0`](https://github.com/derek20la/nrsc5/commit/48399a0525c06fc0be6967c9a37da2bc96c50ebf). So far one fix: a faster HD search (`src/sync.c`: the frequency-offset search uses a sine table and a polynomial arc tangent instead of about 1.7 million C-library calls a second; same sync decisions, about 40 % less processor time while searching). The changes are marked "HiDef Radio patch" in the source. One thing to know if you use nrsc5 yourself (stock v3.2.0, and our fork so far): its HD audio comes out with left and right swapped and the polarity inverted, compared with the same station's analog audio decoded per the FM stereo standard (measured on 20 Los Angeles stations). HiDef Radio corrects that where the audio arrives (`fixHdAudio()` in `native-lib.cpp`); see `tools/lrcheck/README.md`.
 - **Station list** (`app/src/main/assets/stations/`): made from the FCC's FM Query and AM Query (US government data, public domain) by `tools/fcc/make_stations.py`. To refresh it, follow the steps at the top of that script.
 - **Thanks** to [redsea](https://github.com/windytan/redsea) (MIT), used to cross-check the RDS call-letter and character tables. No code was taken.
 - **Thanks** to [ngsoftfm](https://github.com/f4exb/ngsoftfm) (GPL, the SoftFM family) and [Gqrx](https://github.com/gqrx-sdr/gqrx), the reference FM stereo decoders in the left/right check. Test tools only - nothing of them is in the app.
