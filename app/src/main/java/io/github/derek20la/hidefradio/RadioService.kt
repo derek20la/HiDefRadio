@@ -32,6 +32,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.util.Log
 import android.widget.Toast
@@ -293,7 +295,7 @@ class RadioService : Service() {
                     // stopped while we were connecting: close what was opened, start nothing
                     if (ok) engine.execute { RadioEngine.closeDongleNative() }
                 } else if (!ok) {
-                    problem(report.removePrefix("rtl_tcp: "))
+                    problem(report.removePrefix("rtl_tcp: ") + vpnHint())
                     stopEverything()
                 } else if (radioOn) {
                     // (can't happen: one source at a time) - close what we just opened
@@ -305,6 +307,23 @@ class RadioService : Service() {
                 }
             }
         }
+    }
+
+    /**
+     * Build 25: " A VPN is on - …" when the phone's traffic currently goes through a VPN, else "".
+     * Found on the first real test (10-24): the phone's VPN tunnelled the connection to the
+     * laptop on the same Wi-Fi away, and the app could only say "no answer". A VPN app usually
+     * has an "allow LAN access" switch. (Needs ACCESS_NETWORK_STATE - a normal permission,
+     * granted at install, nothing to ask.)
+     */
+    private fun vpnHint(): String {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = try {
+            cm.getNetworkCapabilities(cm.activeNetwork)
+        } catch (e: SecurityException) {
+            null
+        }
+        return if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) " " + getString(R.string.tcp_vpn_hint) else ""
     }
 
     /** 1.2: tell the listener what went wrong - a message now, and the line on the main screen. */
@@ -1357,7 +1376,7 @@ class RadioService : Service() {
         override fun run() {
             // 1.2: the rtl_tcp server went away (stopped, Wi-Fi gone) - stop and say so.
             if (tcpOpen && !retuning && signal().sourceLost) {
-                problem(getString(R.string.tcp_lost, tcpWhere))
+                problem(getString(R.string.tcp_lost, tcpWhere) + vpnHint())
                 stopEverything()
                 return
             }

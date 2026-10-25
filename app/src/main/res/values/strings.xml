@@ -109,6 +109,7 @@
     <string name="setting_tcp_host_hint">e.g. 192.168.1.20 or raspberrypi.local</string>
     <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp (from the RTL-SDR Blog drivers for a V4), and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. Takes effect the next time you start the radio.</string>
     <string name="tcp_connecting">Connecting to %1$s…</string>
+    <string name="tcp_vpn_hint">A VPN is on - it may be sending this connection elsewhere. Turn it off, or allow LAN access in the VPN app.</string>   <!-- build 25 -->
     <string name="tcp_lost">Lost the connection to the rtl_tcp server at %1$s</string>
     <string name="hint_tcp_server">Source: rtl_tcp server at %1$s</string>
     <string name="hint_tcp_no_host">⚠ Set the rtl_tcp server in Settings &gt; Source</string>

@@ -60,6 +60,13 @@ No root, no computer, no internet connection needed (a dongle on another compute
 
 Settings → Source → **rtl_tcp server on the network**: the dongle sits on a PC or a Raspberry Pi running `rtl_tcp` (for a V4 it must be the build from the [RTL-SDR Blog drivers](https://github.com/rtlsdrblog/rtl-sdr-blog)), with the antenna wherever reception is best, and the phone gets the samples over Wi-Fi. No OTG cable, and the phone can charge while the radio plays. Everything else works as with a dongle on the phone. It needs a steady 24 Mbit/s (1.49 million sample pairs a second), so use 5 GHz Wi-Fi or a server on a cable; a slower link makes the sound stutter. On the server: `rtl_tcp -a 0.0.0.0` (it listens on port 1234). rtl_tcp has no password and sends to anyone who connects, so keep it on your home network.
 
+If the app says "can't connect … (no answer)":
+- the phone and the server must be on the same network (a guest Wi-Fi keeps devices apart);
+- on Windows, the Wi-Fi must be a **Private** network (`Get-NetConnectionProfile`; change it with `Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private` in an administrator PowerShell), and the firewall must let port 1234 in (`New-NetFirewallRule -DisplayName "rtl_tcp port 1234" -Direction Inbound -Protocol TCP -LocalPort 1234 -Action Allow -Profile Private`);
+- **a VPN on the phone** sends the connection away from your home network: turn it off, or switch on its "allow LAN access" option. The app adds a line to the message when it sees a VPN.
+
+Over rtl_tcp the phone no longer powers the dongle: about 194 mA with the screen off (a first, short measurement), against about 530 mA with the dongle on the phone.
+
 ### Private by design
 
 Nothing is collected: no ads, no account, no tracking. Since 1.2 the app has the internet permission, for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).

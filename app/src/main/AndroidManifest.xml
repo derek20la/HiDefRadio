@@ -17,6 +17,9 @@
     <!-- 1.2: rtl_tcp - to connect to the rtl_tcp server the user types into Settings > Source
          (a dongle on another computer). Nothing else in the app uses the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Build 25: to tell whether a VPN is on when the rtl_tcp server can't be reached (a hint in the
+         message). A normal permission: granted at install, the app only reads the network's type. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:allowBackup="true"
