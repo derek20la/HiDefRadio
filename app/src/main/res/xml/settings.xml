@@ -7,6 +7,35 @@
      SettingsActivity, from Settings.GAIN_STEPS. -->
 <PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
 
+    <!-- 1.2: where the samples come from - the dongle on the phone, or one on another computer
+         running rtl_tcp (RadioService.startRadioTcp). Takes effect the next time the radio starts. -->
+    <PreferenceCategory app:title="@string/settings_source">
+
+        <ListPreference
+            app:defaultValue="usb"
+            app:entries="@array/source_names"
+            app:entryValues="@array/source_keys"
+            app:key="source"
+            app:title="@string/setting_source"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:defaultValue=""
+            app:key="tcp_host"
+            app:title="@string/setting_tcp_host"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:defaultValue="1234"
+            app:key="tcp_port"
+            app:title="@string/setting_tcp_port"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_source_help" />
+    </PreferenceCategory>
+
     <PreferenceCategory app:title="@string/settings_reception">
 
         <ListPreference

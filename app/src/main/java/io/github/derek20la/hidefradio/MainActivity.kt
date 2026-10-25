@@ -604,6 +604,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateStatusHint(service: RadioService?) {
         val hint = binding.statusHint
+        if (service == null && Settings.useTcp(this)) {
+            // 1.2: the source is an rtl_tcp server: say which one, or why the last try failed.
+            val problem = RadioService.lastProblem
+            val host = Settings.tcpHost(this)
+            hint.text = when {
+                problem.isNotEmpty() -> getString(R.string.hint_tcp_problem, problem)
+                host.isEmpty() -> getString(R.string.hint_tcp_no_host)
+                else -> getString(R.string.hint_tcp_server, "$host:${Settings.tcpPort(this)}")
+            }
+            if (problem.isNotEmpty() || host.isEmpty()) hint.setTextColor(color(R.color.signal_holding))
+            else hintColors?.let { hint.setTextColor(it) }
+            hint.visibility = View.VISIBLE
+            return
+        }
         if (service == null) {
             val dongle = usbManager.deviceList.values.any { d ->
                 Pair(d.vendorId, d.productId) in supportedIds
@@ -1939,6 +1953,20 @@ class MainActivity : AppCompatActivity() {
     /** Look for a supported dongle; get permission; start the radio service. */
     private fun findAndStartRadio() {
         if (RadioService.instance != null) return   // already playing
+
+        // 1.2: Settings > Source = rtl_tcp server: no USB dongle to look for - the service
+        // connects to the server (the line under the station name says to which, or what failed).
+        if (Settings.useTcp(this)) {
+            val host = Settings.tcpHost(this)
+            if (host.isEmpty()) { showMessage(""); return }       // the status line says "set a server"
+            showMessage(getString(R.string.tcp_connecting, "$host:${Settings.tcpPort(this)}"))
+            val intent = Intent(this, RadioService::class.java)
+                .setAction(RadioService.ACTION_START)
+                .putExtra(RadioService.EXTRA_TCP_HOST, host)
+                .putExtra(RadioService.EXTRA_TCP_PORT, Settings.tcpPort(this))
+            ContextCompat.startForegroundService(this, intent)
+            return
+        }
 
         val device = usbManager.deviceList.values.firstOrNull { d ->
             Pair(d.vendorId, d.productId) in supportedIds

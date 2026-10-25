@@ -165,6 +165,15 @@ object RadioEngine {
     external fun setAmDeemphasisNative(on: Boolean)
 
     /**
+     * 1.2: open an rtl_tcp server on the network as the radio's source, instead of a USB dongle
+     * (openDongleNative). Blocks for up to ~8 s if the server doesn't answer - call it on the
+     * engine thread. Returns the report for the debug text, or why it failed ("rtl_tcp: can't
+     * connect to …"); isDongleOpenNative() then says whether it worked. closeDongleNative()
+     * closes it, like the dongle.
+     */
+    external fun openTcpNative(host: String, port: Int): String
+
+    /**
      * 13b: the call letters licensed on the frequency about to be tuned, from the
      * built-in FCC list (Stations.callsOn): "KHYL KWYE KRTH", separated by spaces.
      * [known] = false: there is no list for this frequency (AM, another region,

@@ -25,7 +25,7 @@ for f in nrsc5/src/*.c; do b=$(basename $f .c); [ $b = main ] && continue; [ $b 
 ar rcs libnrsc5.a obj/*.o
 gcc -O2 -w -I rtl-sdr-blog/include -c rtl_stub.c -o rtl_stub.o
 J=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}
-clang++ -std=c++17 -O2 -w -I stub -I nrsc5/include -I rtl-sdr-blog/include -I "$J/include" -I "$J/include/linux" -I "$J/include/darwin" apptest.cpp rtl_stub.o libnrsc5.a faad2/build/libfaad_hdc.a -lpthread -lm -o apptest
+clang++ -std=c++17 -O2 -w -DHIDEF_HARNESS -I stub -I nrsc5/include -I rtl-sdr-blog/include -I "$J/include" -I "$J/include/linux" -I "$J/include/darwin" apptest.cpp rtl_stub.o libnrsc5.a faad2/build/libfaad_hdc.a -lpthread -lm -o apptest
 clang++ -std=c++17 -O2 -w blendtest.cpp -o blendtest
 clang++ -std=c++17 -O2 -w drifttest.cpp -o drifttest
 clang++ -std=c++17 -O2 -w mkdrift.cpp -o mkdrift

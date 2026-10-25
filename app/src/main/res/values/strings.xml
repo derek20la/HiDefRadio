@@ -101,6 +101,18 @@
     <string name="setting_fm_stereo_help">FM stereo and C-QUAM AM stereo. Auto blends to mono as the signal gets noisy, like a car radio (ST on the signal line = stereo). Always mono cuts the hiss of weak DX stations.</string>
     <string name="setting_am_bandwidth">AM audio bandwidth</string>   <!-- build 19 -->
     <string name="setting_am_bandwidth_help">How much of the AM audio is let through. 5 kHz suits most stations, and HD stations send no more on analog. Wider sounds fuller on a strong station without HD, but lets in more whistles from the stations next door.</string>
+    <!-- 1.2: rtl_tcp -->
+    <string name="settings_source">Source</string>
+    <string name="setting_source">Radio source</string>
+    <string name="setting_tcp_host">rtl_tcp server</string>
+    <string name="setting_tcp_port">rtl_tcp port</string>
+    <string name="setting_tcp_host_hint">e.g. 192.168.1.20 or raspberrypi.local</string>
+    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp (from the RTL-SDR Blog drivers for a V4), and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. Takes effect the next time you start the radio.</string>
+    <string name="tcp_connecting">Connecting to %1$s…</string>
+    <string name="tcp_lost">Lost the connection to the rtl_tcp server at %1$s</string>
+    <string name="hint_tcp_server">Source: rtl_tcp server at %1$s</string>
+    <string name="hint_tcp_no_host">⚠ Set the rtl_tcp server in Settings &gt; Source</string>
+    <string name="hint_tcp_problem">⚠ %1$s</string>
     <string name="setting_am_deemph">AM de-emphasis (NRSC)</string>   <!-- build 21 -->
     <string name="setting_am_deemph_help">Takes out the treble boost AM stations add before they transmit, like an AM radio built to the NRSC standard: less hiss, and closer to the HD sound when the blend moves. Turn it off for flat audio (some DXers like the extra treble on weak voices).</string>
     <string name="setting_hd_mismatch">If the HD signal is another station\'s</string>   <!-- 11d: Auto only -->
@@ -260,6 +272,15 @@
     </string-array>
 
     <!-- 11b step 2: FM stereo. Must match Settings.STEREO_AUTO / STEREO_MONO / STEREO_FULL. -->
+    <!-- 1.2: Settings > Source -->
+    <string-array name="source_names">
+        <item>USB dongle on this phone</item>
+        <item>rtl_tcp server on the network</item>
+    </string-array>
+    <string-array name="source_keys" translatable="false">
+        <item>usb</item>
+        <item>tcp</item>
+    </string-array>
     <string-array name="fm_stereo_names">
         <item>Auto (mono when noisy)</item>
         <item>Always mono</item>

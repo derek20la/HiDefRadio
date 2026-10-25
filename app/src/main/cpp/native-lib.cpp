@@ -18,6 +18,7 @@
 
 #include "iqsource.hpp"        // build 17: where the samples come from (the "source split")
 #include "iqsource_usb.hpp"    // build 17: ... the dongle on the USB port (the only file that calls librtlsdr)
+#include "iqsource_tcp.hpp"    // 1.2: ... or on another computer, over the network (rtl_tcp)
 #include "fmdemod.hpp"     // M11: our analog FM demodulator
 #include "amdemod.hpp"     // 1.1 (build 18): our analog AM demodulator (synchronous detector, C-QUAM)
 #include "aligner.hpp"     // M11 (11c): measures the analog-vs-HD time offset and loudness
@@ -43,6 +44,10 @@ extern "C" {
 // see iqsource.hpp for why, and iqsource_usb.hpp for the dongle itself. Written only by
 // openDongleNative / closeDongleNative on the engine thread, with the stream stopped.
 static std::unique_ptr<iq::Source> g_src;
+// 1.2: held while g_src is set or reset (engine thread) and while the status text asks it what
+// it is / whether it was lost (any thread) - so a status call can never meet a source being
+// deleted. Everything else uses g_src only on the engine / streaming threads, as before.
+static std::mutex g_srcMutex;
 
 // ---- Streaming state (Milestone 4) ----
 // HD Radio (nrsc5) needs exactly this sample rate.
@@ -853,7 +858,29 @@ Java_io_github_derek20la_hidefradio_RadioEngine_openDongleNative(
         return env->NewStringUTF("librtlsdr: already open");
     }
     std::string report;
-    g_src = iq::UsbSource::open(fd, &report);   // nullptr if it failed; report says why
+    std::unique_ptr<iq::Source> opened = iq::UsbSource::open(fd, &report);   // nullptr if it failed; report says why
+    std::lock_guard<std::mutex> lock(g_srcMutex);
+    g_src = std::move(opened);
+    return env->NewStringUTF(report.c_str());
+}
+
+// Kotlin (RadioEngine): external fun openTcpNative(host: String, port: Int): String
+// 1.2: instead of a dongle on the USB port, connect to an rtl_tcp server on the network
+// (iq::TcpSource, iqsource_tcp.hpp). Everything after this - startStreamNative, the gain
+// calls, closeDongleNative - works the same on either source. Blocks for up to ~8 s if the
+// server doesn't answer (connect + its 12-byte greeting), so Kotlin calls it on the engine
+// thread. Returns the report (shown under "Show debug info"), or why it failed.
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_openTcpNative(
+        JNIEnv* env, jobject /* this */, jstring jhost, jint port) {
+    if (g_src != nullptr) return env->NewStringUTF("source: already open");
+    const char *h = env->GetStringUTFChars(jhost, nullptr);
+    const std::string host = h != nullptr ? h : "";
+    if (h != nullptr) env->ReleaseStringUTFChars(jhost, h);
+    std::string report;
+    std::unique_ptr<iq::Source> opened = iq::TcpSource::open(host, (int)port, &report);   // nullptr if it failed
+    std::lock_guard<std::mutex> lock(g_srcMutex);
+    g_src = std::move(opened);
     return env->NewStringUTF(report.c_str());
 }
 
@@ -865,7 +892,12 @@ Java_io_github_derek20la_hidefradio_RadioEngine_closeDongleNative(
         JNIEnv* /* env */,
         jobject /* this */) {
     stopStreaming();   // safety: never close while the streaming thread is running
-    g_src.reset();     // deleting the source closes it (UsbSource: rtlsdr_close)
+    std::unique_ptr<iq::Source> old;
+    {
+        std::lock_guard<std::mutex> lock(g_srcMutex);
+        old = std::move(g_src);
+    }
+    old.reset();       // deleting the source closes it (UsbSource: rtlsdr_close; TcpSource: the socket)
     g_direct = false;   // 14c: the next dongle starts with its tuner in use
 }
 
@@ -2281,6 +2313,13 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     out += std::string("hdOn=") + (g_hdOn.load() ? "1" : "0") + "\n";   // 12a step 3: off in Analog only
     // Build 21: the HD program being played is stereo (left and right differ; kept until the
     // next tune). For the VFD's stereo dot while the HD plays.
+    // 1.2: where the samples come from ("USB" / "rtl_tcp"; "" = nothing open), and whether
+    // the source has gone (rtl_tcp: the connection broke - Kotlin then stops and says so).
+    {
+        std::lock_guard<std::mutex> lock(g_srcMutex);
+        out += std::string("sourceKind=") + (g_src ? g_src->kind() : "") + "\n";
+        out += std::string("sourceLost=") + (g_src && g_src->lost() ? "1" : "0") + "\n";
+    }
     out += std::string("hdStereo=") + (sp.stereoFrames >= STEREO_FRAMES ? "1" : "0") + "\n";
     {   // Build 9: the HD search on a station without HD (hdsearch.hpp): on / rest / look,
         // and while it rests the seconds until the next look.

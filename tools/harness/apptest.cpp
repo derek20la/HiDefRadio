@@ -9,6 +9,8 @@
 //   UNMATCHED=hd = the app's default for "If the HD signal is another station's": play it anyway
 //                  (not set = stay on the analog, as every test before build 9 ran)
 //   IQLOOP=1 = play the recording round and round (rtl_stub.c)
+//   SOURCE=tcp:127.0.0.1:1234 = 1.2: take the samples from an rtl_tcp server (rtltcp_replay.py) through
+//                  iq::TcpSource instead of the fake USB dongle; IQSTEP works with it too
 //   OWNER="KDSC 19C2" = what the app remembers from the saved logo of this frequency: the HD
 //                  station's name and its own RDS code ("KDSC" alone = the code is not known)
 //   SPEEDTEST=5 = start the app's speed test (build 12: the "Run speed test" button) 5 s into
@@ -55,7 +57,15 @@ int main(int argc, char **argv) {
     struct Ev { double t; std::string what; int n; bool done; };
     std::vector<Ev> evs;
     for (int a = 4; a < argc; a++) { std::stringstream ss(argv[a]); std::string t, w, n; getline(ss, t, ':'); getline(ss, w, ':'); getline(ss, n, ':'); evs.push_back({ atof(t.c_str()), w, atoi(n.c_str()), false }); }
-    fprintf(stderr, "%s\n", str(J(openDongleNative)(&env, nullptr, 3)).c_str());
+    if (const char *t = getenv("SOURCE"); t && strncmp(t, "tcp:", 4) == 0) {
+        // 1.2: SOURCE=tcp:127.0.0.1:1234 = through iq::TcpSource to an rtl_tcp server
+        // (rtltcp_replay.py), instead of the fake USB dongle. IQFILE is then not used.
+        std::string where = t + 4; size_t colon = where.rfind(':');
+        static std::string host; host = where.substr(0, colon);
+        int port = colon == std::string::npos ? 1234 : atoi(where.c_str() + colon + 1);
+        fprintf(stderr, "%s\n", str(J(openTcpNative)(&env, nullptr, (jstring)&host, port)).c_str());
+    } else
+        fprintf(stderr, "%s\n", str(J(openDongleNative)(&env, nullptr, 3)).c_str());
     {   // build 17: the gain steps as Kotlin's GainKeeper gets them (getGainStepsNative)
         FakeArray *g = (FakeArray *)J(getGainStepsNative)(&env, nullptr);
         printf("gain steps: %zu (%d ... %d)\n", g->i.size(), g->i.empty() ? -1 : g->i.front(), g->i.empty() ? -1 : g->i.back());

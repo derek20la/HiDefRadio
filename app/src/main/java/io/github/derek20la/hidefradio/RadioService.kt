@@ -32,7 +32,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.net.wifi.WifiManager
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
@@ -82,6 +84,13 @@ class RadioService : Service() {
     private lateinit var usbManager: UsbManager
     private var connection: UsbDeviceConnection? = null   // kept open while playing
     private var device: UsbDevice? = null
+    // 1.2: the samples come from an rtl_tcp server on the network instead (no USB connection).
+    private var tcpOpen = false
+    private var tcpWhere = ""                 // "192.168.1.20:1234", for the messages
+    private var wifiLock: WifiManager.WifiLock? = null
+    /** The radio is running - on a USB dongle (connection) or an rtl_tcp server (1.2). */
+    private val radioOn: Boolean
+        get() = connection != null || tcpOpen
     private var wakeLock: PowerManager.WakeLock? = null
     private val handler = Handler(Looper.getMainLooper())
 
@@ -196,15 +205,18 @@ class RadioService : Service() {
                 // startForegroundService(), so do it first.
                 goForeground("Starting…")
                 val dev = IntentCompat.getParcelableExtra(intent, EXTRA_DEVICE, UsbDevice::class.java)
-                if (dev != null && connection == null) {
+                val host = intent.getStringExtra(EXTRA_TCP_HOST)
+                if (dev != null && !radioOn) {
                     if (!startRadio(dev)) stopEverything()
+                } else if (host != null && !radioOn && !tcpConnecting) {
+                    startRadioTcp(host, intent.getIntExtra(EXTRA_TCP_PORT, Settings.DEFAULT_TCP_PORT))   // 1.2
                 }
             }
             ACTION_STOP -> stopEverything()
             // M10a: the notification's buttons (Android 12 and older use these;
             // Android 13+ sends them to the MediaSession callback instead).
             ACTION_PLAY, ACTION_PAUSE, ACTION_NEXT, ACTION_PREVIOUS -> {
-                if (connection == null) {
+                if (!radioOn) {
                     stopEverything()        // an old notification; the radio isn't running
                 } else when (intent.action) {
                     ACTION_PLAY -> play()
@@ -254,6 +266,55 @@ class RadioService : Service() {
             return false
         }
 
+        startPlaying()
+        return true
+    }
+
+    /**
+     * 1.2: the same as startRadio(), but the dongle is on another computer running rtl_tcp.
+     * Connecting can take a few seconds (or up to ~8 s if nobody answers), so it runs on the
+     * engine thread; the notification says "Connecting to …" meanwhile. If it fails, a
+     * message says why (and the main screen shows it under the station name) and the service ends.
+     */
+    private var tcpConnecting = false
+    private fun startRadioTcp(host: String, port: Int) {
+        tcpConnecting = true
+        lastProblem = ""
+        tcpWhere = "$host:$port"
+        goForeground(getString(R.string.tcp_connecting, tcpWhere))
+        val seq = retuneSeq.get()               // stopRadio() bumps it: "stopped while connecting"
+        engine.execute {
+            val report = RadioEngine.openTcpNative(host, port)
+            Log.i(TAG, report)
+            val ok = RadioEngine.isDongleOpenNative()
+            handler.post {
+                tcpConnecting = false
+                if (retuneSeq.get() != seq) {
+                    // stopped while we were connecting: close what was opened, start nothing
+                    if (ok) engine.execute { RadioEngine.closeDongleNative() }
+                } else if (!ok) {
+                    problem(report.removePrefix("rtl_tcp: "))
+                    stopEverything()
+                } else if (radioOn) {
+                    // (can't happen: one source at a time) - close what we just opened
+                    engine.execute { RadioEngine.closeDongleNative() }
+                } else {
+                    tcpOpen = true
+                    dongleInfo = report
+                    startPlaying()
+                }
+            }
+        }
+    }
+
+    /** 1.2: tell the listener what went wrong - a message now, and the line on the main screen. */
+    private fun problem(text: String) {
+        lastProblem = text
+        Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show()
+    }
+
+    /** What startRadio() and startRadioTcp() do once the source is open. */
+    private fun startPlaying() {
         gainKeeper = GainKeeper(RadioEngine.getGainStepsNative())   // M10c
 
         freqHz = loadFrequency(this)    // the station from last time
@@ -272,10 +333,22 @@ class RadioService : Service() {
             acquire()
         }
 
+        // 1.2: on rtl_tcp, keep Wi-Fi out of its power-saving mode too - with the screen off it
+        // would not keep up with the 24 Mbit/s the samples need.
+        if (tcpOpen) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                       else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wm.createWifiLock(mode, "HiDefRadio::rtl_tcp").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+
         handler.post(notificationUpdater)
         handler.postDelayed(gainWatcher, GAIN_TICK_MS)   // M10c
         handler.postDelayed(alignWatcher, ALIGN_TICK_MS) // 11c
-        return true
     }
 
     /**
@@ -329,7 +402,7 @@ class RadioService : Service() {
         saveProgram(this, program)
         val sameStation = newFreqHz == freqHz && (retuning || RadioEngine.isStreamingNative())
         freqHz = newFreqHz
-        if (connection == null) return
+        if (!radioOn) return
 
         if (!sameStation) {
             Log.i(TAG, "Tuning to $newFreqHz Hz")
@@ -389,36 +462,36 @@ class RadioService : Service() {
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             Settings.KEY_GAIN -> applyGain()
-            Settings.KEY_FOCUS -> if (connection != null) {
+            Settings.KEY_FOCUS -> if (radioOn) {
                 applyFocusMode()
                 updatePauseTimer()
                 updateNotification()
             }
             Settings.KEY_PAUSE_STOP -> updatePauseTimer()   // M10a: new time counts from now
             // M11: digital <-> analog <-> auto, live (the native side fades the new source in).
-            Settings.KEY_HD_MODE -> if (connection != null) {
+            Settings.KEY_HD_MODE -> if (radioOn) {
                 sourceOverride = -1                                      // M12 step 2: the setting wins again
                 val source = Settings.audioSourceFor(this, freqHz)       // build 19: AM follows the setting too
                 engine.execute { RadioEngine.setAudioSourceNative(source) }
             }
-            Settings.KEY_HD_MISMATCH -> if (connection != null) {         // 11d
+            Settings.KEY_HD_MISMATCH -> if (radioOn) {         // 11d
                 val playHd = Settings.unmatchedPlaysHd(this)
                 engine.execute { RadioEngine.setBlendUnmatchedNative(playHd) }
             }
             // 11b step 2: stereo / mono and the region's de-emphasis, live (no restart needed).
-            Settings.KEY_FM_STEREO -> if (connection != null) {
+            Settings.KEY_FM_STEREO -> if (radioOn) {
                 val mode = Settings.stereoMode(this)
                 engine.execute { RadioEngine.setStereoModeNative(mode) }
             }
-            Settings.KEY_AM_BANDWIDTH -> if (connection != null) {     // build 19: live, like the stereo setting
+            Settings.KEY_AM_BANDWIDTH -> if (radioOn) {     // build 19: live, like the stereo setting
                 val hz = Settings.amBandwidthHz(this)
                 engine.execute { RadioEngine.setAmBandwidthNative(hz) }
             }
-            Settings.KEY_AM_DEEMPH -> if (connection != null) {        // build 21: live; an unchanged value is harmless
+            Settings.KEY_AM_DEEMPH -> if (radioOn) {        // build 21: live; an unchanged value is harmless
                 val on = Settings.amDeemphasis(this)
                 engine.execute { RadioEngine.setAmDeemphasisNative(on) }
             }
-            Settings.KEY_BAND -> if (connection != null) {
+            Settings.KEY_BAND -> if (radioOn) {
                 val us = Settings.deemphasisUs(this)
                 engine.execute { RadioEngine.setDeemphasisNative(us) }
             }
@@ -431,7 +504,7 @@ class RadioService : Service() {
      * (about 3 s of silence), and keep the program you were on.
      */
     private fun applyGain() {
-        if (connection == null) return
+        if (!radioOn) return
         val gain = Settings.gainTenths(this)
         if (gain >= 0) {
             // M10b: on the engine thread, so it can't collide with an auto-gain in progress.
@@ -601,7 +674,7 @@ class RadioService : Service() {
     @Volatile private var sourceOverride = -1
 
     fun listenToOtherStation() {
-        if (connection == null || retuning) return
+        if (!radioOn || retuning) return
         val source = if (signal().analog) Settings.SOURCE_HD else Settings.SOURCE_ANALOG
         sourceOverride = source
         Log.i(TAG, "Other station's HD: now playing the " + if (source == Settings.SOURCE_HD) "HD" else "analog")
@@ -670,7 +743,7 @@ class RadioService : Service() {
      * out and the new one in (20 ms each) - no gap, no click.
      */
     fun selectProgram(program: Int) {
-        if (connection == null || program == currentProgram()) return
+        if (!radioOn || program == currentProgram()) return
         Log.i(TAG, "Switching to HD${program + 1}")
         if (paused) play()                      // M10a: picking a program = you want to hear it
         handler.removeCallbacks(wantedChecker)  // 9e: a tap beats a wanted program
@@ -699,7 +772,9 @@ class RadioService : Service() {
         retuneSeq.incrementAndGet()             // M10b: cancel retunes still waiting
         retuning = false
         val conn = connection
+        val wasTcp = tcpOpen
         connection = null                       // "radio off" for everything else from now on
+        tcpOpen = false                         // 1.2
         device = null
         // M10b: the native shutdown runs on the engine thread, AFTER whatever it's
         // doing right now (e.g. a retune) - never at the same time. We wait for it
@@ -707,9 +782,9 @@ class RadioService : Service() {
         try {
             engine.submit(Runnable {
                 audioPlayer.stop()                      // 0. stop playing
-                if (conn != null) {
-                    RadioEngine.stopStreamNative()      // 1. stop USB streaming (+ close nrsc5)
-                    RadioEngine.closeDongleNative()     // 2. close librtlsdr + libusb
+                if (conn != null || wasTcp) {
+                    RadioEngine.stopStreamNative()      // 1. stop streaming (+ close nrsc5)
+                    RadioEngine.closeDongleNative()     // 2. close librtlsdr + libusb (1.2: or the rtl_tcp socket)
                 }
             }).get(5, TimeUnit.SECONDS)
         } catch (e: Exception) {
@@ -719,6 +794,8 @@ class RadioService : Service() {
         conn?.close()                           // 3. close Android's connection (the fd)
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+        wifiLock?.let { if (it.isHeld) it.release() }   // 1.2
+        wifiLock = null
     }
 
     /** Stop the radio, remove the notification and end the service. */
@@ -746,7 +823,7 @@ class RadioService : Service() {
      * Is sound coming out? False while paused by you, or while another app
      * has the audio (muted). The notification shows ⏸ when true, ▶ when false.
      */
-    fun isPlaying(): Boolean = connection != null && !paused && !audioPlayer.muted
+    fun isPlaying(): Boolean = radioOn && !paused && !audioPlayer.muted
 
     /**
      * ⏸: silence the radio but keep the tuner running, so ▶ is instantly live.
@@ -754,7 +831,7 @@ class RadioService : Service() {
      * says so).
      */
     fun pause(unplugged: Boolean = false) {
-        if (connection == null || paused) return
+        if (!radioOn || paused) return
         paused = true
         pausedByUnplug = unplugged
         audioPlayer.paused = true
@@ -768,7 +845,7 @@ class RadioService : Service() {
      * app plays (e.g. after a video took over) takes the sound back.
      */
     fun play() {
-        if (connection == null) return
+        if (!radioOn) return
         paused = false
         pausedByUnplug = false                  // 9h
         audioPlayer.paused = false
@@ -794,7 +871,7 @@ class RadioService : Service() {
      * another short interruption - we get the sound back by ourselves).
      */
     fun silentReason(): Int = when {
-        connection == null -> SILENT_NO
+        !radioOn -> SILENT_NO
         paused -> if (pausedByUnplug) SILENT_UNPLUGGED else SILENT_PAUSED
         audioPlayer.muted -> if (mutedForGood) SILENT_OTHER_APP else SILENT_INTERRUPTED
         else -> SILENT_NO
@@ -813,7 +890,7 @@ class RadioService : Service() {
         handler.removeCallbacks(pauseStopper)
         stopAtMs = 0L                                           // 9h
         val minutes = Settings.pauseStopMinutes(this)
-        if (connection != null && (paused || mutedForGood) && minutes > 0) {
+        if (radioOn && (paused || mutedForGood) && minutes > 0) {
             handler.postDelayed(pauseStopper, minutes * 60_000L)
             stopAtMs = SystemClock.elapsedRealtime() + minutes * 60_000L
         }
@@ -833,7 +910,7 @@ class RadioService : Service() {
      * notification already shows where we're going.
      */
     fun skipPreset(forward: Boolean) {
-        if (connection == null) return
+        if (!radioOn) return
         val presets = Presets.load(this)
         if (presets.isEmpty()) {
             val from = if (pendingFreqHz > 0) pendingFreqHz else freqHz
@@ -1278,6 +1355,12 @@ class RadioService : Service() {
      */
     private val notificationUpdater = object : Runnable {
         override fun run() {
+            // 1.2: the rtl_tcp server went away (stopped, Wi-Fi gone) - stop and say so.
+            if (tcpOpen && !retuning && signal().sourceLost) {
+                problem(getString(R.string.tcp_lost, tcpWhere))
+                stopEverything()
+                return
+            }
             updateNotification()
             saveNewLogos()          // 9d step 3
             handler.postDelayed(this, NOTIFICATION_EVERY_MS)
@@ -1285,7 +1368,7 @@ class RadioService : Service() {
     }
 
     private fun updateNotification() {
-        if (connection == null) return
+        if (!radioOn) return
         val now = nowPlaying()
         val playing = isPlaying()
         val key = "$now|$playing"
@@ -1315,6 +1398,11 @@ class RadioService : Service() {
         const val SILENT_OTHER_APP = 3
         const val SILENT_INTERRUPTED = 4
         const val EXTRA_DEVICE = "device"
+        const val EXTRA_TCP_HOST = "tcp_host"        // 1.2: start on an rtl_tcp server instead of USB
+        const val EXTRA_TCP_PORT = "tcp_port"
+
+        /** 1.2: why the radio stopped or couldn't start (rtl_tcp), for the main screen; "" = nothing. */
+        @Volatile var lastProblem: String = ""
         private const val CHANNEL_ID = "radio"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_EVERY_MS = 2_000L  // M10a: was 5 s (only redraws on changes now)

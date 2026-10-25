@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.text.format.DateUtils
 import android.text.format.Formatter
 import android.widget.ScrollView
@@ -15,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -110,6 +112,24 @@ class SettingsActivity : AppCompatActivity() {
                 val values = listOf("auto") + Settings.GAIN_STEPS.map { it.toString() }
                 pref.entries = names.toTypedArray<CharSequence>()
                 pref.entryValues = values.toTypedArray<CharSequence>()
+            }
+
+            // --- 1.2: Source ---
+            // The server's address: a URL-style keyboard, one line, a hint of what to type.
+            findPreference<EditTextPreference>(Settings.KEY_TCP_HOST)?.setOnBindEditTextListener { edit ->
+                edit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                edit.setSingleLine()
+                edit.hint = getString(R.string.setting_tcp_host_hint)
+            }
+            // The port: digits only, 1 .. 65535 (anything else is refused, the old value stays).
+            findPreference<EditTextPreference>(Settings.KEY_TCP_PORT)?.let { pref ->
+                pref.setOnBindEditTextListener { edit ->
+                    edit.inputType = InputType.TYPE_CLASS_NUMBER
+                    edit.setSingleLine()
+                }
+                pref.setOnPreferenceChangeListener { _, value ->
+                    (value as? String)?.trim()?.toIntOrNull()?.let { it in 1..65535 } == true
+                }
             }
 
             // --- 13a step 2: Storage ---

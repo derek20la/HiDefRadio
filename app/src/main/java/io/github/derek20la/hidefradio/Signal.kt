@@ -132,6 +132,7 @@ data class Signal(
     val amDeemph: Boolean,    // build 21: NRSC-1 de-emphasis on (the setting; on by default)
     // 12a step 3: the HD decoder runs (off in Analog only - nrsc5 gets no samples then)
     val hdOn: Boolean,
+    val sourceLost: Boolean,  // 1.2: the rtl_tcp server's connection broke
     val hdStereo: Boolean,    // build 21: the HD program being played is stereo (its left and right differ)
     // Build 9: the HD search on a station without HD (hdsearch.hpp, Auto only). After 30 s
     // without HD the search rests and only looks again for 3 s in every 30:
@@ -319,6 +320,7 @@ data class Signal(
                 amDeemph = long("amDeemph", 1) != 0L,                  // build 21
                 hdOn = bool("hdOn"),                                   // 12a step 3
                 hdStereo = bool("hdStereo"),                           // build 21
+                sourceLost = bool("sourceLost"),                       // 1.2
                 hdSearch = str("hdSearch").ifEmpty { "on" },           // build 9
                 hdLookIn = long("hdLookIn", 0).toInt(),
             )

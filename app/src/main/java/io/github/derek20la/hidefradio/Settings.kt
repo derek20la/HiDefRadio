@@ -29,6 +29,12 @@ object Settings {
                                             // (build 19: serves FM stereo AND C-QUAM AM stereo; the key keeps its old name
                                             // so a choice made before 1.1 is kept)
     const val KEY_AM_BANDWIDTH = "am_bandwidth"   // build 19: analog AM audio bandwidth in Hz as text ("5000")
+    const val KEY_SOURCE = "source"               // 1.2: SOURCE_USB (default) / SOURCE_TCP
+    const val KEY_TCP_HOST = "tcp_host"           // 1.2: the rtl_tcp server's name or address
+    const val KEY_TCP_PORT = "tcp_port"           // 1.2: its port, as text ("1234")
+    const val SOURCE_USB = "usb"
+    const val SOURCE_TCP = "tcp"
+    const val DEFAULT_TCP_PORT = 1234             // rtl_tcp's own default
     const val KEY_AM_DEEMPH = "am_deemph"         // build 21: NRSC-1 de-emphasis on analog AM (a switch, on by default)
 
     // 11b step 2: analog FM stereo (build 19: and C-QUAM AM stereo - one setting for both).
@@ -144,6 +150,16 @@ object Settings {
      * Build 21: NRSC-1 de-emphasis on analog AM, for RadioEngine.setAmDeemphasisNative(). On (the
      * default, as in res/xml/settings.xml) = like an NRSC ("AMAX") AM radio; off = flat audio.
      */
+    /**
+     * 1.2: where the samples come from. USB (the default) = the dongle on the phone; rtl_tcp =
+     * a dongle on another computer running rtl_tcp, over the network ([tcpHost], [tcpPort]).
+     * Takes effect the next time the radio starts.
+     */
+    fun useTcp(context: Context): Boolean = prefs(context).getString(KEY_SOURCE, SOURCE_USB) == SOURCE_TCP
+    fun tcpHost(context: Context): String = prefs(context).getString(KEY_TCP_HOST, "")?.trim() ?: ""
+    fun tcpPort(context: Context): Int =
+        prefs(context).getString(KEY_TCP_PORT, "")?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_TCP_PORT
+
     fun amDeemphasis(context: Context): Boolean = prefs(context).getBoolean(KEY_AM_DEEMPH, true)
 
     /** 11d: play an HD signal that doesn't match the analog? (for RadioEngine.setBlendUnmatchedNative) */

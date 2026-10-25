@@ -248,6 +248,35 @@ Analog only, KOST with its dropouts and four source switches, KKLA (no HD, the s
 KKLQ, AM 1260 on a V4, AM 1260 on a V3 (direct sampling: no gain calls at all, also when the
 gain is asked for), KRTH on a V3, and a dongle that fails to open.
 
+## rtl_tcp (1.2): rtltcp_replay.py, SOURCE=tcp:..., tcptest
+
+`app/src/main/cpp/iqsource_tcp.hpp` (iq::TcpSource) takes the samples from an rtl_tcp server
+instead of the USB dongle. To test it without a dongle, `rtltcp_replay.py` is a stand-in
+server that plays a .cu8 recording and speaks the real protocol (12-byte "RTL0" greeting, raw
+cu8, 5-byte commands, which it logs with `--trace`):
+
+    python3 rtltcp_replay.py krth.cu8 1234 --trace calls.txt &          # "lockstep": starts at the first tune
+    SOURCE=tcp:127.0.0.1:1234 IQSTEP=1 UNMATCHED=hd WAVOUT=tcp.wav build/apptest 101100000 2 30
+    tail -c +1190701 krth.cu8 > krth_cut.cu8                             # TcpSource drops 0.4 s after a tune
+    IQFILE=krth_cut.cu8 IQSTEP=1 UNMATCHED=hd WAVOUT=usb.wav build/apptest 101100000 2 30
+    cmp tcp.wav usb.wav                                                  # identical
+
+`--live` sends like a real server (from the moment of connecting, real time, whatever the
+client does); `--speed X`, `--cut-after S` (the server dies after S seconds), `--tuner N
+--gains N` (what the greeting says). `apptest` gets `SOURCE=tcp:host:port`; `build.sh` builds
+it with `-DHIDEF_HARNESS`, which gives TcpSource the virtual-time hook. `tcptest.cpp` is the
+source alone against a live replay, for the thread sanitizer:
+`g++ -std=c++17 -fsanitize=thread -I build/stub -I ../../app/src/main/cpp tcptest.cpp -o tcptest -lpthread`.
+
+Results on 2026-10-24: through the socket = bit for bit the USB path on KRTH (FM, Auto, 30 s)
+and KBRT 740 (AM, Auto, 40 s); the server got rate / freq / gain mode / gain 30.0 dB. Live
+server: auto-gain (5 tries sent as commands, ~0.9 s - each measurement waits 0.12 s for the new
+gain), KKGO HD1 -> HD2 -> HD1, blend to HD. `--cut-after 8`: "the server closed the
+connection", stream returns -1, `sourceLost=1`. No server / unknown host / not an rtl_tcp
+server: each gives its own reason. A link at 85 % of the needed rate: no errors, the engine
+waits. tcptest under the thread sanitizer: 10 checks, no reports. And the USB path is bit for
+bit build 23 (KRTH Auto, KKGO with auto-gain and sub-channels, KMZT, KBRT on a V3).
+
 ## Analog AM (build 18): amtest, and AM in apptest
 
 Build 18 gives the AM band its analog side (`amdemod.hpp`: synchronous detector, C-QUAM

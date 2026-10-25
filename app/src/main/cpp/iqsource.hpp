@@ -16,13 +16,14 @@
 //               <--- tune / gain -----
 //
 // iq::Source is the list of things the radio asks of a source. A source is anything that
-// can do those things. Today there is one: iq::UsbSource (iqsource_usb.hpp), the dongle on
-// the USB port, which does each of them with exactly the librtlsdr call the app always made.
-// Later sources plug in beside it without touching the radio:
-//   - rtl_tcp (planned for 1.1): the dongle sits on another computer and the samples come
-//     over the home network. Its protocol has a command for every item below except two it
-//     cannot answer (the dongle's USB names, and whether the driver went to direct sampling);
-//     see "WHAT A SOURCE MAY NOT KNOW".
+// can do those things. There are two:
+//   - iq::UsbSource (iqsource_usb.hpp), the dongle on the USB port, which does each of them
+//     with exactly the librtlsdr call the app always made;
+//   - iq::TcpSource (iqsource_tcp.hpp, 1.2): the dongle sits on another computer running
+//     rtl_tcp and the samples come over the home network. Its protocol has a command for every
+//     item below except two it cannot answer (the dongle's USB names, and whether the driver
+//     went to direct sampling); see "WHAT A SOURCE MAY NOT KNOW".
+// A further one could plug in beside them without touching the radio:
 //   - a recording (.cu8 file) played back - the desktop test harness does this today one
 //     level lower, by standing in for librtlsdr itself (tools/harness/rtl_stub.c).
 //
@@ -105,6 +106,10 @@ public:
     // value is only for the log (librtlsdr's own code).
     virtual int stream(SampleFn fn, void *ctx) = 0;
     virtual void cancel() = 0;                          // from another thread: make stream() return
+
+    // 1.2: has the source gone for good (rtl_tcp: the connection broke)? The radio shows it.
+    // A USB dongle that is unplugged is reported by Android instead, so USB says false.
+    virtual bool lost() const { return false; }
 };
 
 }  // namespace iq

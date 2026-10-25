@@ -4,7 +4,7 @@
 
 An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with a USB-OTG adapter and listen to **HD Radio™ (NRSC-5)** and ordinary **analog FM**, with a smooth blend between the two, like a car radio.
 
-No root, no computer, no internet connection needed. Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
+No root, no computer, no internet connection needed (a dongle on another computer over your Wi-Fi works too, since 1.2). Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
 > **Status: 1.1.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
@@ -56,9 +56,13 @@ No root, no computer, no internet connection needed. Everything you hear and see
 - A **built-in station list** from FCC data (the US, plus the Canadian and Mexican stations the FCC keeps on file). The details show the city of license, power and class, and stations whose RDS code can't be turned into call letters on its own (iHeart's "1xxx" codes) still get their call sign. Nothing is looked up online.
 - A notice when the HD signal on a frequency belongs to **another station** than the analog one you hear (it happens to DXers), with a tap to listen to the other one.
 
+### The dongle somewhere else: rtl_tcp (1.2)
+
+Settings → Source → **rtl_tcp server on the network**: the dongle sits on a PC or a Raspberry Pi running `rtl_tcp` (for a V4 it must be the build from the [RTL-SDR Blog drivers](https://github.com/rtlsdrblog/rtl-sdr-blog)), with the antenna wherever reception is best, and the phone gets the samples over Wi-Fi. No OTG cable, and the phone can charge while the radio plays. Everything else works as with a dongle on the phone. It needs a steady 24 Mbit/s (1.49 million sample pairs a second), so use 5 GHz Wi-Fi or a server on a cable; a slower link makes the sound stutter. On the server: `rtl_tcp -a 0.0.0.0` (it listens on port 1234). rtl_tcp has no password and sends to anyone who connects, so keep it on your home network.
+
 ### Private by design
 
-Nothing is collected: no ads, no account, no tracking. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
+Nothing is collected: no ads, no account, no tracking. Since 1.2 the app has the internet permission, for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
 
 ## What you need
 
@@ -158,7 +162,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 ### Where things are
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
-- `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. A network source (rtl_tcp) is planned to plug in beside it.
+- `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. `iqsource_tcp.hpp` (1.2) is the other source: a dongle on another computer, over the network (rtl_tcp).
 - Next to it are nine self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter). `vec4.hpp` next to it is its four-floats-at-a-time layer: NEON on arm64, plain C++ anywhere else.
   - `amdemod.hpp`: the analog AM demodulator - carrier PLL, synchronous detector, carrier-to-noise meter, C-QUAM stereo. It reuses the FM file's filters.
@@ -194,7 +198,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 ## Plans
 
 - **1.1** (done): analog AM with the blend and C-QUAM AM stereo, NRSC AM de-emphasis, a stereo dot on the frequency display, export / import of favorites.
-- **1.2**: an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi.
+- **1.2** (beta): an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses
