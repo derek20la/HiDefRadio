@@ -41,6 +41,10 @@ example of driving the engine outside Android.
 - events `t:rec:N` (1.3: start an IQ recording into `IQREC`, default `iqrec.cu8` - a second one
   goes to `iqrec.cu8.2` - with an N s limit, 0 = none) and `t:recstop:0` (stop it). The run prints
   what was saved and why it ended; the file must be an exact slice of `IQFILE`.
+- `RDS: PS text "..."` in the log (build 37): a station that scrolls its song through the PS
+  (91X: "THE" "MIDDLE" "by Jimmy" ...) put back together by `psstitch.hpp`, once it has gone
+  round. `build/pstest` checks the stitching on made-up sequences (garbled frames, a new song,
+  a sliding window) that the recordings don't have.
 - `SPEEDTEST=5` presses the app's "Run speed test" button 5 s into the run and prints the
   result at the end (see "What does the radio cost" below).
 - `STEREO=mono` / `STEREO=stereo` the app's FM stereo setting (Always mono / Always stereo;

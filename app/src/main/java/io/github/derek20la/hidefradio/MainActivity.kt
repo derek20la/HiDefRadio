@@ -1358,6 +1358,7 @@ class MainActivity : AppCompatActivity() {
         )
         if (s.rdsPs.isNotBlank()) lines += "PS \"${s.rdsPs}\"" +
             if (s.rdsPsChanges >= Signal.PS_SCROLLING_CHANGES) " (scrolling)" else ""   // build 36
+        if (s.rdsPsText.isNotBlank()) lines += "PS scrolls: ${s.rdsPsText}"              // build 37
         if (s.rdsTitle.isNotBlank()) lines += "♪ " + listOf(s.rdsTitle, s.rdsArtist).filter { it.isNotBlank() }.joinToString(" – ")
         if (s.rdsRt.isNotBlank()) lines += s.rdsRt
         return listOf("RDS" to lines.joinToString("\n"))

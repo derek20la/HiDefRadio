@@ -13,7 +13,7 @@ APP=${APP:-$HERE/../../app/src/main/cpp}
 mkdir -p "$HERE/build" && cd "$HERE/build"
 cp "$APP"/native-lib.cpp "$APP"/*.hpp .
 mkdir -p cfg && cp "$APP/nrsc5-config/config.h" cfg/
-cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/searchtest.cpp" "$HERE/mkhdgap.cpp" "$HERE/mkcochannel.cpp" "$HERE/identtest.cpp" "$HERE/amtest.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
+cp "$HERE/apptest.cpp" "$HERE/blendtest.cpp" "$HERE/drifttest.cpp" "$HERE/mkdrift.cpp" "$HERE/searchtest.cpp" "$HERE/mkhdgap.cpp" "$HERE/mkcochannel.cpp" "$HERE/identtest.cpp" "$HERE/amtest.cpp" "$HERE/pstest.cpp" "$HERE/rtl_stub.c" "$HERE/fftw3.h" .
 # nrsc5, rtl-sdr-blog and FAAD2 come from the APP's vendored copies (app/src/main/cpp/external),
 # not from GitHub, so the harness runs exactly the decoder the app ships - including the
 # HiDef Radio patches to nrsc5 (2026-10-24: the faster HD search in sync.c). nrsc5 is
@@ -42,5 +42,6 @@ clang++ -std=c++17 -O3 -w mkhdgap.cpp -o mkhdgap
 clang++ -std=c++17 -O3 -w mkcochannel.cpp -o mkcochannel
 clang++ -std=c++17 -O2 -w identtest.cpp -o identtest
 clang++ -std=c++17 -O2 -w amtest.cpp -o amtest
-echo 'built build/apptest, build/blendtest, build/drifttest, build/identtest, build/amtest, build/mkdrift, build/searchtest, build/mkhdgap and build/mkcochannel. e.g.:'
+clang++ -std=c++17 -O2 -w pstest.cpp -o pstest
+echo 'built build/apptest, build/blendtest, build/drifttest, build/identtest, build/amtest, build/pstest, build/mkdrift, build/searchtest, build/mkhdgap and build/mkcochannel. e.g.:'
 echo '  IQFILE=klos.cu8 IQPACE=1 WAVOUT=out.wav build/apptest 95500000 2 34 4.5:prog:1 22:prog:0'

@@ -1349,6 +1349,8 @@ class RadioService : Service() {
             val (line1, line2) = when {
                 s.rdsTitle.isNotBlank() ->
                     s.rdsTitle to (if (s.rdsArtist.isNotBlank()) "${s.rdsArtist} · $station" else station)
+                // Build 37: the song a station scrolls through its PS, put back together
+                s.rdsPsText.isNotBlank() -> s.rdsPsText to station
                 else -> station to s.rdsRt.ifEmpty { type }
             }
             // The other station's HD logo / art would be the wrong picture -> none then.

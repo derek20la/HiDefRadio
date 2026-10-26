@@ -604,6 +604,8 @@ public:
     float stereoAmount() const { return stereo; }                         // 0 = mono ... 1 = full stereo (the blend)
     // The RDS decoder (PI / call letters, PS, RadioText ...) - see rds.hpp.
     const rds::Decoder &rds() const { return rdsDec; }
+    // Build 37: the tuned frequency, for the PS stitching (rds.hpp / psstitch.hpp). After reset().
+    void setRdsFreqKhz(int khz) { rdsDec.setFreqKhz(khz); }
     // Total delay of the analog path in seconds (filters only; not counting output buffering).
     double latencySeconds() const {
         return (stage1.groupDelay() / IQ_RATE) + (stage2.groupDelay() + 0.5) / MPX_RATE + audio.delaySamplesIn / MPX_RATE;

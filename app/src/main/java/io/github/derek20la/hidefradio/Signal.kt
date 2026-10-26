@@ -111,6 +111,8 @@ data class Signal(
     val rdsPsSecs: Int,       // how long the PS has stayed the same (a real name stands still)
     val rdsPsChanges: Int,    // build 36: how often the PS has changed on this station (scrolling text: many times)
     val rdsRt: String,        // RadioText (up to 64 characters)
+    val rdsPsText: String,    // build 37: a scrolling PS put back together ("THE MIDDLE by Jimmy Eat World on 91X"; psstitch.hpp)
+    val rdsRtOther: String,   // build 37: the newest RadioText that isn't just a piece of rdsPsText (91X: its app ad)
     val rdsTitle: String,     // RT+ tags: song title / artist, when the station marks them
     val rdsArtist: String,
     val rdsPty: Int,          // program type number 0-31 (-1 = not known) - names: Rds.ptyName()
@@ -163,11 +165,27 @@ data class Signal(
             if (rdsPsSecs >= RDS_NAME_AFTER_S && rdsPsChanges < PS_SCROLLING_CHANGES) rdsPs else ""
         }
 
-    /** M12: "what's on" from RDS: the tagged song title, else the whole RadioText. */
+    /**
+     * M12: "what's on" from RDS: the tagged song title, else the whole RadioText.
+     * Build 37: a station that scrolls its song through the PS (91X, Z90, Magic 92.5, Alt 98.7)
+     * gets the whole scrolled message as line 1, steady, once it has gone round once - and
+     * under it, smaller, whatever its RadioText says that isn't already in it (91X's app ad;
+     * not "Jimmy Eat World" again). Before, line 1 flipped between the RadioText's pieces:
+     * "THE MIDDLE", then "Jimmy Eat World", then the ad (Derek: "err on the side of showing
+     * everything"). RT+ tags still come first - a station that tags its songs is clearer.
+     */
     val rdsLine1: String
-        get() = if (rdsTitle.isNotBlank()) rdsTitle else rdsRt
+        get() = when {
+            rdsTitle.isNotBlank() -> rdsTitle
+            rdsPsText.isNotBlank() -> rdsPsText
+            else -> rdsRt
+        }
     val rdsLine2: String
-        get() = if (rdsTitle.isNotBlank()) rdsArtist else ""
+        get() = when {
+            rdsTitle.isNotBlank() -> rdsArtist
+            rdsPsText.isNotBlank() -> rdsRtOther
+            else -> ""
+        }
 
     /**
      * M12 step 2: the HD on this frequency is ANOTHER station's (RDS says KHHT, the HD
@@ -316,6 +334,8 @@ data class Signal(
                 rdsPsSecs = long("rdsPsSecs", 0).toInt(),
                 rdsPsChanges = long("rdsPsChanges", 0).toInt(),         // build 36
                 rdsRt = str("rdsRt").trim(),
+                rdsPsText = str("rdsPsText").trim(),                   // build 37
+                rdsRtOther = str("rdsRtOther").trim(),                 // build 37
                 rdsTitle = str("rdsTitle").trim(),
                 rdsArtist = str("rdsArtist").trim(),
                 rdsPty = long("rdsPty", -1).toInt(),

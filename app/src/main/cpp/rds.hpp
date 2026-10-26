@@ -42,6 +42,7 @@
 #include <string>
 #include <vector>
 #include "vec4.hpp"                                // four floats per instruction (NEON on arm64)
+#include "psstitch.hpp"                            // build 37: a scrolling PS put back together
 #include <algorithm>
 
 namespace rds {
@@ -142,6 +143,9 @@ struct Status {
     int psChanges = 0;          // build 36: how often the PS changed since it was first confirmed (a scrolling PS:
                                 // dozens; a station name: 0). Signal.kt: after a few, a PS that stands still for
                                 // a while is still not taken as the station's name (91X's "Matthew", 10-26).
+    std::string psText;         // build 37: a scrolling PS put back together (psstitch.hpp): "THE MIDDLE by
+                                // Jimmy Eat World on 91X"; "" until the station has gone round its message once
+    std::string rtOther;        // build 37: the newest RadioText that is not just a piece of psText (shown under it)
     std::string rt;             // RadioText (the last complete message)
     std::string title, artist;  // RT+ tags, when the station sends them
     int pty = -1;               // program type 0-31 (-1 = not known); the names differ between RBDS and RDS
@@ -217,6 +221,10 @@ public:
         baseband(zi, zq);
     }
 
+    // Build 37: the tuned frequency in kHz, so psstitch.hpp can tell which PS frame is the station's
+    // own name ("91X" on 91.1). Set after reset(), before the samples flow; reset() keeps it.
+    void setFreqKhz(int khz) { stitch_.setFreqKhz(khz); }
+
     // A counter that changes whenever something in status() changed (so the caller can skip the copy).
     uint32_t serial() const { return serial_; }
     bool synced() const { return synced_; }
@@ -228,6 +236,8 @@ public:
         s.piOk = piOk; s.pi = piCur;
         if (piOk) s.call = (piCur >> 12) == 1 ? callSeen : callFromPi(piCur);
         if (psOk) { s.ps = toUtf8(psPub, 8); s.psSecs = (float)((bitNo - psSince) / BIT_RATE); s.psChanges = psChanges; }
+        s.psText = toUtf8(stitch_.text().data(), (int)stitch_.text().size());          // build 37
+        s.rtOther = toUtf8(stitch_.rtOther().data(), (int)stitch_.rtOther().size());
         s.rt = toUtf8(rtPub, rtPubLen);
         s.title = toUtf8(title, titleLen); s.artist = toUtf8(artist, artistLen);
         s.pty = pty; s.tp = tp; s.ta = ta;
@@ -432,6 +442,7 @@ private:
     void clearText() {
         std::memset(psVal, 0, sizeof(psVal)); std::memset(psCnt, 0, sizeof(psCnt)); std::memset(psBit, 0, sizeof(psBit));
         psOk = false; std::memset(psPub, ' ', sizeof(psPub)); psSince = 0; psChanges = 0;
+        stitch_.clear();                                     // build 37
         rtClear(); rtFlagKnown = false; rtPubLen = 0;
         rtpCode = -1; rtpCodeCand = -1;
         titleLen = artistLen = 0; callSeen.clear();
@@ -506,6 +517,7 @@ private:
         if (psOk && std::memcmp(now, psPub, 8) == 0) return;
         if (psOk) psChanges++;                               // build 36: a new text where a confirmed one stood
         std::memcpy(psPub, now, 8); psOk = true; psSince = bitNo; serial_++;
+        stitch_.onFrame(psPub, bitNo / BIT_RATE);            // build 37: one more frame of a scrolling PS?
         lookForCall(psPub, 8);
     }
 
@@ -540,7 +552,7 @@ private:
         if (!rtDone || len != rtPubLen || std::memcmp(now, rtPub, len) != 0) {
             bool same = len == rtPubLen && std::memcmp(now, rtPub, len) == 0;
             std::memcpy(rtPub, now, len); rtPubLen = len; rtDone = true;
-            if (!same) { titleLen = artistLen = 0; serial_++; lookForCall(rtPub, rtPubLen); }
+            if (!same) { titleLen = artistLen = 0; serial_++; lookForCall(rtPub, rtPubLen); stitch_.onRt(rtPub, rtPubLen); }
             applyTags();
         }
     }
@@ -613,6 +625,7 @@ private:
     int pty = -1, ptyCand = -1, ptyCnt = 0; bool tp = false, ta = false;
     uint16_t psVal[4] = {}; int psCnt[4] = {}; long psBit[4] = {}, psSince = 0;
     bool psOk = false; uint8_t psPub[8] = {}; int psChanges = 0;
+    PsStitch stitch_;                                        // build 37: the scrolling PS put back together
     uint16_t rtVal[32] = {}, rtTent[32] = {}; int rtCnt[32] = {}; bool rtTentOk[32] = {};
     bool rtFlag = false, rtFlagKnown = false, rtDone = false;
     int rtFlagVotes = 0, rtMaxCell = -1, rtWraps = 0, rtLastCell = -1, rtPubLen = 0;

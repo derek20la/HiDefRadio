@@ -793,6 +793,7 @@ static void demodAnalog(const unsigned char *buf, uint32_t len) {
             rds::Status now = g_fm.rds().status();
             g_ident.onRds(now, tNow);
             if (now.piOk && (!g_rds.piOk || g_rds.pi != now.pi)) LOGI("RDS: PI %04X %s", now.pi, now.call.c_str());
+            if (now.psText != g_rds.psText) LOGI("RDS: PS text \"%s\"", now.psText.c_str());   // build 37
             g_rds = now;
         }
         g_ident.tick(tNow, g_fm.rds().lately());
@@ -1865,6 +1866,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
     g_mode = freqHz < AM_BELOW_HZ ? NRSC5_MODE_AM : NRSC5_MODE_FM;
     clearAudio();                            // and any old audio
     g_fm.reset();                            // M11: analog demodulator starts fresh (no old station in its filters)
+    g_fm.setRdsFreqKhz((int)(freqHz / 1000)); // build 37: which PS frame names the station (psstitch.hpp)
     g_am.reset();                            // build 18: the AM one too
     g_fmCarrierDb = -99.0f;
     g_fmOffsetHz = 0.0f;
@@ -2399,6 +2401,8 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
         out += "rdsCall=" + clean(r.call) + "\n";
         out += "rdsPs=" + clean(r.ps) + "\n";
         out += "rdsRt=" + clean(r.rt) + "\n";
+        out += "rdsPsText=" + clean(r.psText) + "\n";           // build 37: the scrolling PS put together
+        out += "rdsRtOther=" + clean(r.rtOther) + "\n";         // build 37: RadioText that isn't a piece of it
         out += "rdsTitle=" + clean(r.title) + "\n";
         out += "rdsArtist=" + clean(r.artist) + "\n";
     }
