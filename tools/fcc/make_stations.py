@@ -25,6 +25,8 @@ The data is the FCC's (public domain). Stations change, so refresh it now and th
   2. python3 make_stations.py fcc_fm.txt fcc_am.txt ../../app/src/main/assets/stations 2026-10-01
      (the last argument is the day you downloaded the files)
 
+  3. Call letter changes the FCC pages don't show yet: RECENT_CALLS below (KRCD -> KLXM, 10-26).
+
 What goes in, what stays out
   FM: licensed (status LIC) full-power stations (FM), low power (FL), translators (FX)
       and boosters (FB) in the US; licensed stations with a call sign in Canada, Mexico
@@ -145,6 +147,26 @@ def build_am(path):
             if da and "n" not in row["da"]: row["da"] += "n"
     return list(st.values())
 
+# Call letter changes the FCC's FM / AM Query pages don't show yet. Those pages come from the
+# FCC's old database (CDBS); since 2025 changes are made in the new one (LMS) and can take
+# months to reach them. Each line: (frequency as in the files, old call, new call, since, source).
+# Applied only while the FCC data still has the OLD call - once it has caught up, a line does
+# nothing and can be deleted.
+RECENT_CALLS = [
+    # TelevisaUnivision flipped both from "Recuerdo" (Spanish oldies) to "Latino Mix", early
+    # August 2026 (Barrett Media 2026-08-04, Inside Radio). Seen on the air 10-26: 103.9's RDS
+    # spells KLXM, which the app called "unconfirmed" because the list still said KRCD.
+    (10390, "KRCD", "KLXM", "2026-08", "Barrett Media 2026-08-04"),
+    (9830,  "KRCV", "KLXO", "2026-08", "Barrett Media 2026-08-04"),
+]
+
+def apply_recent_calls(rows):
+    for freq, old, new, since, _source in RECENT_CALLS:
+        for r in rows:
+            if r["freq"] == freq and r["call"] == old:
+                print("  call change: %s -> %s on %s (since %s, not in the FCC data yet)" % (old, new, freq, since))
+                r["call"] = new
+
 def write(rows, path, title, line):
     rows.sort(key=lambda r: (r["freq"], r["country"] != "US", r["state"], r["city"], r["call"]))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -162,6 +184,7 @@ def main():
     fm_in, am_in, out_dir, day = sys.argv[1:]
     os.makedirs(out_dir, exist_ok=True)
     fm, am = build_fm(fm_in), build_am(am_in)
+    apply_recent_calls(fm)
     head = "# HiDef Radio station list - source: FCC %s Query (public domain) - date %s - stations %d\n"
     write(fm, os.path.join(out_dir, "fm.txt"), head % ("FM", day, len(fm)) +
           "# @frequency in 10 kHz, then call|service|class|H=HD|city|state|country|lat|lon|ERP kW|HAAT m\n",
