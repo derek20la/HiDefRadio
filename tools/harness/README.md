@@ -38,6 +38,9 @@ example of driving the engine outside Android.
   what build 8 played.
 - `UNMATCHED=hd` the app's own default for "If the HD signal is another station's": play it
   anyway. (Not set = stay on the analog, as every test before build 9 ran.)
+- events `t:rec:N` (1.3: start an IQ recording into `IQREC`, default `iqrec.cu8` - a second one
+  goes to `iqrec.cu8.2` - with an N s limit, 0 = none) and `t:recstop:0` (stop it). The run prints
+  what was saved and why it ended; the file must be an exact slice of `IQFILE`.
 - `SPEEDTEST=5` presses the app's "Run speed test" button 5 s into the run and prints the
   result at the end (see "What does the radio cost" below).
 - `STEREO=mono` / `STEREO=stereo` the app's FM stereo setting (Always mono / Always stereo;

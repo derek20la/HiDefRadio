@@ -19,6 +19,8 @@
 //   events: "t:prog:N" = select program N (0 = HD1) at t seconds;  "t:src:N" = change the audio source
 //           "t:gain:N" = the manual gain setting -> N tenths of a dB (setGainNative);
 //           "t:again:N" = the gain watchdog moves the auto gain to N (setAutoGainNative)   (build 17)
+//           "t:rec:N" = start an IQ recording into $IQREC (default iqrec.cu8), N s limit (0 = none);
+//           "t:recstop:0" = stop it (startIqRecordNative / stopIqRecordNative, 1.3)
 // Prints one line per 0.25 s with the keys of interest from getSignalNative(), and at the end
 // what the run cost: the two loads the app shows in its signal details (demod, HD decode),
 // averaged over the run, and the processor time of the whole harness per second of radio.
@@ -27,17 +29,20 @@ extern "C" { extern void (*rtl_stub_after_block)(double seconds); extern volatil
 #include <map>
 #include <sstream>
 #include <sys/resource.h>      // getrusage: the processor time this program has used
+#include <fcntl.h>             // open (1.3: the IQ recording's file)
 // Seconds of processor time used so far (all threads).
 static double cpuSeconds() {
     struct rusage u; getrusage(RUSAGE_SELF, &u);
     return (double)u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + (double)u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6;
 }
-struct FakeArray { std::vector<int16_t> s; std::vector<int8_t> b; std::vector<int32_t> i; };
+struct FakeArray { std::vector<int16_t> s; std::vector<int8_t> b; std::vector<int32_t> i; std::vector<int64_t> l; };
 static jstring JNICALL fNewStringUTF(JNIEnv *, const char *t) { return (jstring) new std::string(t); }
 static jstring JNICALL fNewString(JNIEnv *, const jchar *c, jsize n) { auto *s = new std::string; for (jsize k = 0; k < n; k++) s->push_back(c[k] < 128 ? (char)c[k] : '?'); return (jstring)s; }
 static const char *JNICALL fGetStringUTFChars(JNIEnv *, jstring s, jboolean *) { return ((std::string *)s)->c_str(); }
 static void JNICALL fReleaseStringUTFChars(JNIEnv *, jstring, const char *) {}
-static jsize JNICALL fGetArrayLength(JNIEnv *, jarray a) { FakeArray *f = (FakeArray *)a; return (jsize)std::max(f->s.size(), std::max(f->b.size(), f->i.size())); }
+static jsize JNICALL fGetArrayLength(JNIEnv *, jarray a) { FakeArray *f = (FakeArray *)a; return (jsize)std::max({f->s.size(), f->b.size(), f->i.size(), f->l.size()}); }
+static jlongArray JNICALL fNewLongArray(JNIEnv *, jsize n) { auto *f = new FakeArray; f->l.resize((size_t)n); return (jlongArray)f; }   // 1.3: IQ recording
+static void JNICALL fSetLongArrayRegion(JNIEnv *, jlongArray a, jsize st, jsize n, const jlong *buf) { memcpy(((FakeArray *)a)->l.data() + st, buf, (size_t)n * 8); }
 static void JNICALL fSetShortArrayRegion(JNIEnv *, jshortArray a, jsize st, jsize n, const jshort *buf) { memcpy(((FakeArray *)a)->s.data() + st, buf, (size_t)n * 2); }
 static jbyteArray JNICALL fNewByteArray(JNIEnv *, jsize n) { auto *f = new FakeArray; f->b.resize((size_t)n); return (jbyteArray)f; }
 static jintArray JNICALL fNewIntArray(JNIEnv *, jsize n) { auto *f = new FakeArray; f->i.resize((size_t)n); return (jintArray)f; }
@@ -52,6 +57,7 @@ int main(int argc, char **argv) {
     table.ReleaseStringUTFChars = fReleaseStringUTFChars; table.GetArrayLength = fGetArrayLength;
     table.SetShortArrayRegion = fSetShortArrayRegion; table.NewByteArray = fNewByteArray; table.NewIntArray = fNewIntArray;
     table.SetByteArrayRegion = fSetByteArrayRegion; table.SetIntArrayRegion = fSetIntArrayRegion;
+    table.NewLongArray = fNewLongArray; table.SetLongArrayRegion = fSetLongArrayRegion;
     JNIEnv env; env.functions = &table;
     int hz = atoi(argv[1]), src = atoi(argv[2]); double secs = atof(argv[3]);
     struct Ev { double t; std::string what; int n; bool done; };
@@ -124,6 +130,21 @@ int main(int argc, char **argv) {
             if (e.what == "prog") J(setProgramNative)(E, nullptr, e.n);
             else if (e.what == "gain") printf("        manual gain -> %d\n", J(setGainNative)(E, nullptr, e.n));      // build 17
             else if (e.what == "again") printf("        watchdog gain -> %d\n", J(setAutoGainNative)(E, nullptr, e.n));
+            else if (e.what == "rec") {               // 1.3: "t:rec:N" = start an IQ recording into $IQREC, N s limit (0 = none)
+                // Like Recorder.kt: an earlier recording that ended by itself is collected first; each
+                // recording gets a file of its own (iqrec.cu8, iqrec.cu8.2, ...).
+                if (FakeArray *r = (FakeArray *)J(takeIqRecordNative)(E, nullptr))
+                    printf("        IQ recording saved: %lld bytes, reason %lld\n", (long long)r->l[0], (long long)r->l[1]);
+                static int recs = 0;
+                std::string name = getenv("IQREC") ? getenv("IQREC") : "iqrec.cu8";
+                if (++recs > 1) name += "." + std::to_string(recs);
+                int fd = open(name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                printf("        IQ recording -> %d (0 = recording)\n", (int)J(startIqRecordNative)(E, nullptr, fd, e.n));
+            } else if (e.what == "recstop") {         // "t:recstop:0" = the ⏺ button again
+                J(stopIqRecordNative)(E, nullptr);
+                FakeArray *r = (FakeArray *)J(takeIqRecordNative)(E, nullptr);
+                if (r) printf("        IQ recording saved: %lld bytes, reason %lld\n", (long long)r->l[0], (long long)r->l[1]);
+            }
             else J(setAudioSourceNative)(E, nullptr, e.n);
             printf("%7.2f  >>> %s %d\n", t, e.what.c_str(), e.n);
         }
@@ -204,6 +225,8 @@ int main(int argc, char **argv) {
         printf("---- speed test ----\n%s\n----\n", str(J(getSpeedTestNative)(&env, nullptr)).c_str());
     }
     J(stopStreamNative)(&env, nullptr);
+    if (FakeArray *r = (FakeArray *)J(takeIqRecordNative)(&env, nullptr))      // 1.3: a recording still going on ends with the stream
+        printf("IQ recording saved: %lld bytes, reason %lld\n", (long long)r->l[0], (long long)r->l[1]);
     J(closeDongleNative)(&env, nullptr);
     // What it cost. "whole harness" = everything this program did (nrsc5, the demodulator,
     // the aligner, the blend, this status text), in % of one core of THIS computer.

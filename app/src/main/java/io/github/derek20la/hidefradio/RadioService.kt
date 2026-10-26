@@ -101,6 +101,12 @@ class RadioService : Service() {
         bufferedValues = { RadioEngine.getAudioBufferedNative() },
     )
 
+    /**
+     * 1.3 (build 34): the ⏺ recording (audio and / or IQ). MainActivity starts and stops it
+     * (startRecording, recorder.stop); a new station or the radio stopping ends it here.
+     */
+    val recorder by lazy { Recorder(applicationContext, audioPlayer) }
+
     // ---- Milestone 8c: audio focus ----
     // Android's "talking stick" for sound: we ask for it when we start playing,
     // and Android tells us (onAudioFocusChange) when another app wants to play.
@@ -457,6 +463,7 @@ class RadioService : Service() {
      * about half a second after HD1-3 - and HD1's sound could win that race.)
      */
     private fun restartStream(program: Int = 0) {
+        recorder.stop()                         // 1.3: a recording is one station - saved now
         val seq = retuneSeq.incrementAndGet()
         val hz = freqHz
         retuning = true
@@ -788,6 +795,7 @@ class RadioService : Service() {
 
     /** Shuts everything down in the safe order. Safe to call twice. */
     private fun stopRadio() {
+        recorder.stop()                         // 1.3: a recording going on is saved
         handler.removeCallbacks(notificationUpdater)
         handler.removeCallbacks(gainWatcher)    // M10c
         handler.removeCallbacks(alignWatcher)   // 11c
@@ -857,6 +865,15 @@ class RadioService : Service() {
      * has the audio (muted). The notification shows ⏸ when true, ▶ when false.
      */
     fun isPlaying(): Boolean = radioOn && !paused && !audioPlayer.muted
+
+    /**
+     * 1.3: ⏺ - starts recording what Settings -> Recording says (audio, IQ or both).
+     * null = recording; else the message to show (no folder chosen, not playing yet ...).
+     */
+    fun startRecording(): String? {
+        if (!radioOn || retuning || !RadioEngine.isStreamingNative()) return getString(R.string.rec_not_playing)
+        return recorder.start(Settings.recWhat(this), freqHz, signal().station, currentProgram().coerceAtLeast(0))
+    }
 
     /**
      * ⏸: silence the radio but keep the tuner running, so ▶ is instantly live.

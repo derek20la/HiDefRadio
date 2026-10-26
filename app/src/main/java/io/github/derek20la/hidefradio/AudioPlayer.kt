@@ -55,6 +55,14 @@ class AudioPlayer(
     @Volatile var startedAtMs = 0L
         private set
 
+    /**
+     * 1.3 (build 34): the audio recording's "tap" - gets every chunk of audio as it goes to
+     * the speaker (count = values, 2 per stereo frame). It must copy what it wants and return
+     * at once (it runs on the audio thread). null = not recording. Paused / muted don't
+     * matter: it gets the radio's audio, not the speaker's volume.
+     */
+    @Volatile var tap: ((buffer: ShortArray, count: Int) -> Unit)? = null
+
     fun start() {
         if (running) return
         running = true
@@ -121,6 +129,7 @@ class AudioPlayer(
 
                 val n = readAudio(buffer, 200)   // wait up to 200 ms for audio
                 if (n > 0) {
+                    tap?.invoke(buffer, n)       // 1.3: recording? (a copy goes to the encoder)
                     track.write(buffer, 0, n)    // blocks until AudioTrack has room
                 } else {
                     underruns++                  // nothing arrived in 200 ms

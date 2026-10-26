@@ -41,6 +41,7 @@ No root, no computer, no internet connection needed (a dongle on another compute
 
 - A "now playing" screen with a glowing VFD-style frequency display, station name, program, title and artist, album art and station logos.
 - **Favorites** as a scrolling strip of logo tiles. Tap ☆ to save the current station and program, hold a tile and drag it to change the order, and long-press to rename or delete. Logos are cached, so the tiles show them before a station sends them again. Settings → Storage → **Export / Import favorites** saves the list (with your names) to a plain text file and loads it back - for a new phone, or to move between installs.
+- **Recording** (since 1.3): tap ⏺ to record what you hear as an AAC file (.aac, about 1 MB a minute), the raw IQ samples from the tuner (.cu8), or both. You pick the folder once. IQ files grow fast (about 180 MB a minute), so an IQ recording stops by itself after 60 seconds unless you choose a longer limit in Settings → Recording. A new station or stopping the radio ends a recording and saves it.
 - On a tablet the screen splits in two: the radio on the left, the signal details always open on the right.
 - Plays in the background with the screen off.
 - Media controls in the notification, on the lock screen, and from headsets, Bluetooth and car radios. ⏮ ⏭ jump between favorites. Pause keeps the tuner running, so playback resumes live right away. The radio stops by itself after a pause (5 minutes by default) and pauses when you unplug headphones.
@@ -72,7 +73,7 @@ Over rtl_tcp the phone no longer powers the dongle: about 194 mA with the screen
 
 ### Private by design
 
-Nothing is collected: no ads, no account, no tracking. Since 1.2 the app has the internet permission (and on Android 17 and later asks for local network access, "Nearby devices"), for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
+Nothing is collected: no ads, no account, no tracking. Recordings (1.3) go only into the folder you pick, and the app can reach no other files. Since 1.2 the app has the internet permission (and on Android 17 and later asks for local network access, "Nearby devices"), for one thing only: connecting to the rtl_tcp server you type in. With the USB dongle it opens no network connection at all. See the [privacy policy](https://github.com/derek20la/hidefradio-privacy).
 
 ## What you need
 
@@ -173,6 +174,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 - `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
 - `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. `iqsource_tcp.hpp` (1.2) is the other source: a dongle on another computer, over the network (rtl_tcp).
+- `iqrecord.hpp` (1.3) records the samples into a file, untouched, on a writer thread of its own (the IQ half of ⏺).
 - Next to it are nine self-contained C++17 headers with no Android code in them:
   - `fmdemod.hpp`: the analog FM demodulator (stereo decoder, pilot PLL, quieting meter). `vec4.hpp` next to it is its four-floats-at-a-time layer: NEON on arm64, plain C++ anywhere else.
   - `amdemod.hpp`: the analog AM demodulator - carrier PLL, synchronous detector, carrier-to-noise meter, C-QUAM stereo. It reuses the FM file's filters.
@@ -188,6 +190,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
   - `RadioEngine`: the JNI functions.
   - `RadioService`: the foreground service, tuning, audio focus and the media notification.
   - `MainActivity`: the screen.
+  - `Recorder` and `AacWriter` (1.3): the ⏺ recording - the folder, the files, the AAC encoder.
   - `AudioPlayer`, `GainKeeper` (the gain watchdog), `Stations` (the station list), `Presets` (the favorites), `LogoCache`, `Settings` and the rest.
 - `app/src/main/assets/stations/` holds the station list. `tools/fcc/make_stations.py` builds it from the FCC's data.
 - `app/src/main/cpp/CMakeLists.txt` builds libusb, librtlsdr, FFTW, FAAD2 and nrsc5 as static libraries.
@@ -210,6 +213,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 - **1.1** (done): analog AM with the blend and C-QUAM AM stereo, NRSC AM de-emphasis, a stereo dot on the frequency display, export / import of favorites.
 - **1.2** (done): an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi; our nrsc5 fork (a faster HD search, the right left / right in HD audio, MER named by its true sideband); a screen rotation setting.
 - **1.2.1** (done): the blend on stations whose analog is processed very differently from their HD (it aligns sooner, stays aligned, and comes back to the HD after a dropout); rtl_tcp on AM: the Gain row says so when the server's dongle ignores the gain (a V3 in direct sampling); rtl_tcp on Android 17: asks for the new local network permission ("Nearby devices"), without which the server can't be reached.
+- **1.3**: recording - audio (AAC) and IQ (.cu8, with a time limit), to a folder you choose.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses

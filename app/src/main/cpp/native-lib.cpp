@@ -26,6 +26,7 @@
 #include "drift.hpp"            // build 6: the dongle's clock vs the station's (clock correction)
 #include "hdsearch.hpp"         // build 9: the HD search rests on a station without HD
 #include "stationid.hpp"        // build 10: whose station is this? (RDS codes, call letters, the audio)
+#include "iqrecord.hpp"         // 1.3 (build 34): IQ recording - the samples, as they come, into a file
 
 // nrsc5.h is a C header without C++ guards, so tell the C++ compiler
 // "these are C functions" (otherwise the linker can't find them).
@@ -64,6 +65,10 @@ static std::atomic<float> g_peakDbfs{-99.0f};    // peak-to-peak of latest block
 static std::atomic<float> g_peakMax{-99.0f};
 
 static void stopStreaming();   // defined further down
+
+// 1.3 (build 34): the IQ recorder (iqrecord.hpp). onSamples() hands it every block while a
+// recording is going on; stopStreaming() ends the recording (a new station, the radio off).
+static iqrec::Recorder g_iqRec;
 
 // ---- Decoder state (Milestone 6) ----
 static nrsc5_t *g_nrsc5 = nullptr;   // the nrsc5 decoder, fed by onSamples()
@@ -1645,6 +1650,7 @@ static bool openHd() {
 static void onSamples(unsigned char *buf, uint32_t len, void * /* ctx */) {
     g_bytes += len;
     benchRecord(buf, len);                    // build 12: a speed test is recording? (else one atomic read)
+    g_iqRec.push(buf, len);                   // 1.3: an IQ recording is going on? (else one atomic read)
 
     // Signal level: RMS distance from the center value, 0 (silence) .. ~128.
     // Just a sanity check that the data is real radio noise/signal, not zeros.
@@ -1944,6 +1950,13 @@ static void stopStreaming() {
     }
     g_streaming = false;
 
+    // 1.3: no more samples -> an IQ recording ends here, with everything it got in the file.
+    // (One recording = one station: a new tune starts a new file, if you want one.)
+    if (g_iqRec.state() == iqrec::RECORDING) {
+        g_iqRec.finish(iqrec::RADIO_STOPPED);
+        LOGI("IQ recording ended (stream stopped): %lld bytes", g_iqRec.written());
+    }
+
     // Streaming has stopped, so nobody is feeding nrsc5 any more -> safe to close.
     if (g_nrsc5 != nullptr) {
         hdClose(g_nrsc5);
@@ -1952,6 +1965,58 @@ static void stopStreaming() {
     }
     g_hdOn = false;
     g_hdRest = hdsearch::SEARCHING; g_hdLookInS = 0;      // build 9: nothing rests while nothing plays
+}
+
+// ---- 1.3 (build 34): IQ recording (iqrecord.hpp) ----
+
+// Kotlin (RadioEngine): external fun startIqRecordNative(fd: Int, maxSeconds: Int): Int
+// [fd] = a file opened for writing (Kotlin: ParcelFileDescriptor.detachFd()) - from now on
+// the native side owns it and closes it. [maxSeconds] <= 0 = no limit.
+// 0 = recording; 1 = the radio is not streaming; 2 = a recording is already going on;
+// 3 = no memory for the 16 MB buffer. (On 1-3 the fd is closed here.)
+extern "C" JNIEXPORT jint JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_startIqRecordNative(
+        JNIEnv* /* env */, jobject /* this */, jint fd, jint maxSeconds) {
+    if (!g_streaming.load()) { ::close(fd); return 1; }
+    const long long maxBytes = maxSeconds > 0 ? (long long)maxSeconds * SAMPLE_RATE * 2 : 0;
+    int r = g_iqRec.start(fd, maxBytes);
+    if (r == 0) LOGI("IQ recording started (%d s limit, 0 = none)", (int)maxSeconds);
+    else LOGE("IQ recording could not start (%d)", r);
+    return r;
+}
+
+// Kotlin (RadioEngine): external fun stopIqRecordNative()
+// Ends a recording that is going on and waits until its file is complete and closed (a
+// fraction of a second; not on the main thread). The result is then waiting for
+// takeIqRecordNative().
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_stopIqRecordNative(JNIEnv*, jobject) {
+    g_iqRec.finish(iqrec::BY_YOU);
+}
+
+// Kotlin (RadioEngine): external fun getIqRecordNative(): LongArray
+// [state (0 idle, 1 recording, 2 ended - waiting to be taken), bytes written so far]. Any thread.
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_getIqRecordNative(JNIEnv* env, jobject) {
+    jlong v[2] = { (jlong)g_iqRec.state(), (jlong)g_iqRec.written() };
+    jlongArray a = env->NewLongArray(2);
+    if (a != nullptr) env->SetLongArrayRegion(a, 0, 2, v);
+    return a;
+}
+
+// Kotlin (RadioEngine): external fun takeIqRecordNative(): LongArray?
+// An ended recording's result - [bytes in the file, why it ended (iqrec::Reason)] - and the
+// recorder is free again. null = nothing ended (none, or still recording).
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_takeIqRecordNative(JNIEnv* env, jobject) {
+    long long bytes = 0;
+    int reason = 0;
+    if (!g_iqRec.collect(&bytes, &reason)) return nullptr;
+    LOGI("IQ recording saved: %lld bytes (reason %d)", bytes, reason);
+    jlong v[2] = { (jlong)bytes, (jlong)reason };
+    jlongArray a = env->NewLongArray(2);
+    if (a != nullptr) env->SetLongArrayRegion(a, 0, 2, v);
+    return a;
 }
 
 // Kotlin (RadioEngine): external fun stopStreamNative()

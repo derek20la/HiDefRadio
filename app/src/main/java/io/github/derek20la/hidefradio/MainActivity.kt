@@ -162,6 +162,19 @@ class MainActivity : AppCompatActivity() {
                 localNetworkRefused()
             }
         }
+    // 1.3 (build 34): Android's folder picker for the recordings folder, when ⏺ is tapped
+    // before one was chosen. With a folder, the recording then starts straight away.
+    private val recFolderLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) return@registerForActivityResult          // "back": no folder, no recording
+            if (Recordings.setFolder(this, uri)) {
+                Toast.makeText(this, getString(R.string.rec_folder_set, Recordings.folderName(this) ?: ""),
+                               Toast.LENGTH_SHORT).show()
+                startRecording()
+            } else {
+                Toast.makeText(this, R.string.rec_folder_refused, Toast.LENGTH_LONG).show()
+            }
+        }
     // 9h: the status line's normal text colors (it turns amber for "plug in").
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
@@ -274,6 +287,7 @@ class MainActivity : AppCompatActivity() {
             RadioService.instance?.stopFromScreen()
             refreshScreen()
         }
+        binding.recordButton.setOnClickListener { onRecordButton() }    // 1.3: ⏺
 
         // Listen for our USB permission answer.
         ContextCompat.registerReceiver(
@@ -597,8 +611,81 @@ class MainActivity : AppCompatActivity() {
         // 9e step 3: radio off -> offer to start it again.
         binding.startButton.visibility = if (service == null) View.VISIBLE else View.GONE
         updatePauseButton(service)
+        updateRecordButton(service)                             // 1.3
         updateSticky(binding.scroll.scrollY)                    // 9g
     }
+
+    // ------------------------------------------------------------------ recording (1.3)
+
+    /** ⏺: stop the recording going on, or start one (choosing the folder first, the first time). */
+    private fun onRecordButton() {
+        val service = RadioService.instance ?: return
+        if (service.recorder.recording) {
+            service.recorder.stop()                              // "Saved ..." comes when the file is done
+        } else if (Recordings.folder(this) == null) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.rec_choose_folder_title)
+                .setMessage(R.string.rec_choose_folder_message)
+                .setPositiveButton(R.string.rec_choose_folder) { _, _ -> recFolderLauncher.launch(null) }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        } else {
+            startRecording()
+        }
+        refreshScreen()
+    }
+
+    /** Starts what Settings > Recording says, and says so ("⏺ Recording IQ - stops after 60 s"). */
+    private fun startRecording() {
+        val service = RadioService.instance ?: return
+        val problem = service.startRecording()
+        val text = problem ?: run {
+            val limit = Settings.recIqLimitS(this)
+            val limitText = Recorder.limitText(this, limit)
+            when (Settings.recWhat(this)) {
+                Settings.REC_IQ -> if (limit > 0) getString(R.string.rec_started_iq, limitText)
+                                   else getString(R.string.rec_started_iq_nolimit)
+                Settings.REC_BOTH -> if (limit > 0) getString(R.string.rec_started_both, limitText)
+                                     else getString(R.string.rec_started_both_nolimit)
+                else -> getString(R.string.rec_started_audio)
+            }
+        }
+        Toast.makeText(this, text, if (problem != null) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+        refreshScreen()
+    }
+
+    /**
+     * ⏺ only while the radio is on (Derek: no record button on a radio that is off). Always
+     * red, so it reads as "record"; while recording it is a red ■ (tap = stop) with the time.
+     */
+    private fun updateRecordButton(service: RadioService?) {
+        val button = binding.recordButton
+        val time = binding.recTime
+        if (service == null) {
+            button.visibility = View.GONE
+            time.visibility = View.GONE
+            return
+        }
+        button.visibility = View.VISIBLE
+        val recorder = service.recorder
+        if (recorder.recording) {
+            button.setImageResource(R.drawable.ic_btn_stop)
+            button.contentDescription = getString(R.string.record_stop)
+            val elapsed = clock(recorder.elapsedMs() / 1000)
+            val limit = recorder.iqLimitS()
+            time.text = if (recorder.iqOnly() && limit > 0) "$elapsed / ${clock(limit.toLong())}" else elapsed
+            time.visibility = View.VISIBLE
+        } else {
+            button.setImageResource(R.drawable.ic_btn_record)
+            button.contentDescription = getString(R.string.record)
+            time.visibility = View.GONE
+        }
+    }
+
+    /** 42 -> "0:42", 3725 -> "1:02:05". */
+    private fun clock(seconds: Long): String =
+        if (seconds >= 3600) String.format(Locale.US, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+        else String.format(Locale.US, "%d:%02d", seconds / 60, seconds % 60)
 
     /**
      * M10a: ⏸ while sound is playing, ▶ while paused (or another app has the sound).

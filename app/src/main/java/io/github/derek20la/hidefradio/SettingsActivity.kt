@@ -103,6 +103,9 @@ class SettingsActivity : AppCompatActivity() {
             ActivityResultContracts.CreateDocument("text/plain")) { uri -> if (uri != null) exportTo(uri) }
         private val importLauncher = registerForActivityResult(
             ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) importFrom(uri) }
+        // 1.3 (build 34): Android's folder picker, for the recordings folder (Recordings in Recorder.kt).
+        private val folderLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) folderChosen(uri) }
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.settings, rootKey)
@@ -134,6 +137,14 @@ class SettingsActivity : AppCompatActivity() {
                     (value as? String)?.trim()?.toIntOrNull()?.let { it in 1..65535 } == true
                 }
             }
+
+            // --- 1.3 (build 34): Recording ---
+            // "Recordings folder" -> Android's folder picker (it starts in the folder chosen before).
+            findPreference<Preference>(Settings.KEY_REC_FOLDER)?.setOnPreferenceClickListener {
+                folderLauncher.launch(Recordings.folder(requireContext()))
+                true
+            }
+            updateFolderSummary()
 
             // --- 13a step 2: Storage ---
 
@@ -207,6 +218,27 @@ class SettingsActivity : AppCompatActivity() {
             super.onResume()
             updateClearSummary()
             updateFavoritesSummary()
+            updateFolderSummary()                 // 1.3: the folder may have been chosen on the main screen
+        }
+
+        /** 1.3: "Music/HiDef Radio - tap to choose another." or "Not chosen yet ..." */
+        private fun updateFolderSummary() {
+            val name = Recordings.folderName(requireContext())
+            findPreference<Preference>(Settings.KEY_REC_FOLDER)?.summary =
+                if (name == null) getString(R.string.setting_rec_folder_none)
+                else getString(R.string.setting_rec_folder_summary, name)
+        }
+
+        /** 1.3: a folder came back from the picker - keep it (Android must allow it for good). */
+        private fun folderChosen(uri: Uri) {
+            val context = requireContext()
+            if (Recordings.setFolder(context, uri)) {
+                Toast.makeText(context, getString(R.string.rec_folder_set, Recordings.folderName(context) ?: ""),
+                               Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, R.string.rec_folder_refused, Toast.LENGTH_LONG).show()
+            }
+            updateFolderSummary()
         }
 
         /** Build 22: "Save your 12 favorites and their names to a file ..." */

@@ -110,7 +110,7 @@
     <string name="setting_tcp_host">rtl_tcp server</string>
     <string name="setting_tcp_port">rtl_tcp port</string>
     <string name="setting_tcp_host_hint">e.g. 192.168.1.20 or raspberrypi.local</string>
-    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp (from the RTL-SDR Blog drivers for a V4), and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. On Android 17 and later, Android asks once for \"Nearby devices\" (local network access) the first time you start the radio this way. Takes effect the next time you start the radio.</string>
+    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp, and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. On Android 17 and later, Android asks once for \"Nearby devices\" (local network access) the first time you start the radio this way. Takes effect the next time you start the radio.</string>
     <string name="tcp_connecting">Connecting to %1$s…</string>
     <string name="tcp_vpn_hint">A VPN is on - it may be sending this connection elsewhere. Turn it off, or allow LAN access in the VPN app.</string>   <!-- build 25 -->
     <string name="tcp_lost">Lost the connection to the rtl_tcp server at %1$s</string>
@@ -366,4 +366,67 @@
     <string name="hint_stops_in">The radio turns off in %1$d min</string>
     <string name="hint_plug_in">⚠ Plug in the RTL-SDR (USB-OTG cable)</string>
     <string name="start_radio_icon">Start radio</string>
+
+    <!-- 1.3 (build 34): recording - Settings > Recording, the ⏺ button, Recorder.kt -->
+    <string name="settings_recording">Recording</string>
+    <string name="setting_rec_what">⏺ records</string>
+    <string-array name="rec_what_names">
+        <item>Audio (what you hear)</item>
+        <item>IQ (the raw samples from the tuner)</item>
+        <item>Audio and IQ</item>
+    </string-array>
+    <string-array name="rec_what_keys" translatable="false">
+        <item>audio</item>
+        <item>iq</item>
+        <item>both</item>
+    </string-array>
+    <string name="setting_rec_folder">Recordings folder</string>
+    <string name="setting_rec_folder_none">Not chosen yet - tap to choose where recordings are saved.</string>
+    <string name="setting_rec_folder_summary">%1$s - tap to choose another.</string>
+    <string name="setting_rec_iq_limit">IQ recording limit</string>
+    <string-array name="rec_iq_limit_names">
+        <item>30 seconds</item>
+        <item>60 seconds</item>
+        <item>2 minutes</item>
+        <item>5 minutes</item>
+        <item>15 minutes</item>
+        <item>No limit</item>
+    </string-array>
+    <string-array name="rec_iq_limit_keys" translatable="false">
+        <item>30</item>
+        <item>60</item>
+        <item>120</item>
+        <item>300</item>
+        <item>900</item>
+        <item>0</item>
+    </string-array>
+    <string name="setting_rec_help">Tap ⏺ on the main screen to start, and again to stop. Changing station or stopping the radio also ends a recording and saves it. Audio is saved as AAC (.aac), about 1 MB a minute.</string>
+    <string name="setting_rec_iq_help">IQ files grow rapidly in size: about 180 MB a minute, so an IQ recording stops by itself after the limit above. IQ is saved untouched as .cu8 (8-bit I/Q, 1,488,375 samples a second), which nrsc5 plays back with -r and most SDR programs can open.</string>
+    <string name="rec_choose_folder_title">Where should recordings go?</string>
+    <string name="rec_choose_folder_message">Choose a folder for your recordings (or make a new one, e.g. \"HiDef Radio\" in Music). The app can only save files in the folder you choose. You can change it later in Settings &gt; Recording.</string>
+    <string name="rec_choose_folder">Choose folder</string>
+    <string name="rec_folder_set">Recordings go to %1$s.</string>
+    <string name="rec_folder_refused">Android didn\'t allow that folder. Please choose another one.</string>
+    <string name="rec_no_folder">Choose a folder for recordings first (Settings &gt; Recording).</string>
+    <string name="rec_folder_gone">Couldn\'t create a file in the recordings folder. Please choose it again in Settings &gt; Recording.</string>
+    <string name="rec_cant_write">Couldn\'t open the recording file for writing.</string>
+    <string name="rec_not_playing">Recording starts once the station is playing.</string>
+    <string name="rec_iq_no_memory">Not enough free memory for an IQ recording right now.</string>
+    <string name="rec_started_audio">⏺ Recording audio</string>
+    <string name="rec_started_iq">⏺ Recording IQ - stops after %1$s</string>
+    <string name="rec_started_iq_nolimit">⏺ Recording IQ - no limit, about 180 MB a minute</string>
+    <string name="rec_started_both">⏺ Recording audio and IQ (IQ stops after %1$s)</string>
+    <string name="rec_started_both_nolimit">⏺ Recording audio and IQ</string>
+    <string name="rec_saved">Saved %1$s: %2$s</string>
+    <string name="rec_iq_limit">IQ recording reached the %1$s limit. Saved %2$s: %3$s</string>
+    <string name="rec_iq_too_slow">IQ recording stopped: the storage couldn\'t keep up. Saved %1$s: %2$s</string>
+    <string name="rec_iq_write_failed">IQ recording stopped: couldn\'t write any more (is the storage full?). Saved %1$s: %2$s</string>
+    <string name="rec_iq_failed_empty">The IQ recording couldn\'t be saved.</string>
+    <string name="rec_audio_failed">Audio recording stopped: couldn\'t encode or write any more. Saved %1$s: %2$s</string>
+    <string name="rec_audio_failed_empty">The audio recording couldn\'t be saved.</string>
+    <string name="rec_audio_goes_on">Audio keeps recording.</string>
+    <string name="rec_seconds">%1$d s</string>
+    <string name="rec_minutes">%1$d min</string>
+    <string name="record">Record</string>
+    <string name="record_stop">Stop recording</string>
 </resources>

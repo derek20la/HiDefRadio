@@ -244,6 +244,32 @@
                     android:orientation="horizontal" />
             </HorizontalScrollView>
 
+            <!-- 1.3 (build 34): recording. A red ⏺ (shown while the radio is on) starts it - red, so it reads as "record";
+                 while recording it turns into a red ■ (stop) and the time runs next to it ("0:42"; IQ only: "0:42 / 1:00",
+                 the IQ limit). What it records: Settings > Recording. -->
+            <TextView
+                android:id="@+id/rec_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:fontFeatureSettings="tnum"
+                android:textColor="@color/signal_lost"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <ImageButton
+                android:id="@+id/record_button"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/record"
+                android:padding="13dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_btn_record"
+                android:visibility="gone"
+                app:tint="@color/signal_lost" />
+
             <ImageButton
                 android:id="@+id/settings_button"
                 android:layout_width="40dp"

@@ -39,6 +39,14 @@ object Settings {
     const val DEFAULT_TCP_PORT = 1234             // rtl_tcp's own default
     const val KEY_AM_DEEMPH = "am_deemph"         // build 21: NRSC-1 de-emphasis on analog AM (a switch, on by default)
 
+    // 1.3 (build 34): recording (Recorder.kt).
+    const val KEY_REC_WHAT = "rec_what"           // REC_AUDIO (default) / REC_IQ / REC_BOTH: what ⏺ records
+    const val KEY_REC_FOLDER = "rec_folder"       // the recordings folder's address (a content:// tree URI), see Recordings
+    const val KEY_REC_IQ_LIMIT = "rec_iq_limit"   // IQ stops after this many seconds, as text ("60"); "0" = no limit
+    const val REC_AUDIO = "audio"
+    const val REC_IQ = "iq"
+    const val REC_BOTH = "both"
+
     // 11b step 2: analog FM stereo (build 19: and C-QUAM AM stereo - one setting for both).
     // The numbers are what RadioEngine.setStereoModeNative() takes.
     const val STEREO_AUTO = "auto"       // stereo, blended to mono as the signal gets noisy (default, like a car radio)
@@ -168,6 +176,14 @@ object Settings {
         prefs(context).getString(KEY_TCP_PORT, "")?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_TCP_PORT
 
     fun amDeemphasis(context: Context): Boolean = prefs(context).getBoolean(KEY_AM_DEEMPH, true)
+
+    /** 1.3: what the ⏺ button records - REC_AUDIO (default), REC_IQ or REC_BOTH. */
+    fun recWhat(context: Context): String =
+        prefs(context).getString(KEY_REC_WHAT, REC_AUDIO).takeIf { it == REC_IQ || it == REC_BOTH } ?: REC_AUDIO
+
+    /** 1.3: IQ recordings stop after this many seconds (default 60 - IQ is ~180 MB a minute); 0 = no limit. */
+    fun recIqLimitS(context: Context): Int =
+        prefs(context).getString(KEY_REC_IQ_LIMIT, "60")?.toIntOrNull()?.takeIf { it >= 0 } ?: 60
 
     /** 11d: play an HD signal that doesn't match the analog? (for RadioEngine.setBlendUnmatchedNative) */
     fun unmatchedPlaysHd(context: Context): Boolean =

@@ -217,4 +217,30 @@ object RadioEngine {
 
     /** Build 12: a speed test is recording or working right now. */
     external fun isSpeedTestBusyNative(): Boolean
+
+    // ---- 1.3 (build 34): IQ recording (cpp/iqrecord.hpp; Recorder.kt runs it) ----
+
+    /**
+     * Starts recording the raw IQ samples into [fd] - a file opened for writing
+     * (ParcelFileDescriptor.detachFd(): from now on the native side owns it and closes it).
+     * [maxSeconds] <= 0 = no limit. 0 = recording; 1 = the radio isn't streaming;
+     * 2 = a recording is already going on; 3 = not enough memory. Any thread.
+     */
+    external fun startIqRecordNative(fd: Int, maxSeconds: Int): Int
+
+    /**
+     * Ends the IQ recording and waits until its file is complete and closed (up to a few
+     * tenths of a second - NOT on the main thread). Then call takeIqRecordNative().
+     */
+    external fun stopIqRecordNative()
+
+    /** [state, bytes written]: state 0 = idle, 1 = recording, 2 = ended (take it). Any thread. */
+    external fun getIqRecordNative(): LongArray
+
+    /**
+     * An ended IQ recording: [bytes in the file, why it ended] - 1 you stopped it, 2 the
+     * limit, 3 couldn't write, 4 storage too slow, 5 the radio stopped / another station.
+     * null = nothing has ended. Frees the recorder for the next one.
+     */
+    external fun takeIqRecordNative(): LongArray?
 }

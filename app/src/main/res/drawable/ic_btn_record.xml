@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 1.3 (build 34): ⏺ record, a plain filled circle, cropped tight like the other ic_btn_*
+     icons (so the button's padding alone decides its size). Tinted gray / white like the
+     other buttons, red while recording (MainActivity.updateRecordButton). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="12dp"
+    android:viewportWidth="12"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M6,0a6,6 0,1 1,0 12a6,6 0,1 1,0 -12z" />
+</vector>

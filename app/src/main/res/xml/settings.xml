@@ -153,6 +153,33 @@
             app:summary="@string/setting_media_buttons_help" />
     </PreferenceCategory>
 
+    <!-- 1.3 (build 34): the ⏺ button on the main screen (Recorder.kt). SettingsActivity
+         handles the folder picker and fills in the folder's name. -->
+    <PreferenceCategory app:title="@string/settings_recording">
+        <ListPreference
+            app:defaultValue="audio"
+            app:entries="@array/rec_what_names"
+            app:entryValues="@array/rec_what_keys"
+            app:key="rec_what"
+            app:title="@string/setting_rec_what"
+            app:useSimpleSummaryProvider="true" />
+        <Preference
+            app:key="rec_folder"
+            app:title="@string/setting_rec_folder" />
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_rec_help" />
+        <ListPreference
+            app:defaultValue="60"
+            app:entries="@array/rec_iq_limit_names"
+            app:entryValues="@array/rec_iq_limit_keys"
+            app:key="rec_iq_limit"
+            app:title="@string/setting_rec_iq_limit"
+            app:useSimpleSummaryProvider="true" />
+        <Preference
+            app:selectable="false"
+            app:summary="@string/setting_rec_iq_help" />
+    </PreferenceCategory>
     <!-- 9h: the look. "Follow the phone" = light or dark like the rest of the
          phone; "True black" = dark with a pure black background (OLED). -->
     <PreferenceCategory app:title="@string/settings_display">
