@@ -1356,7 +1356,8 @@ class MainActivity : AppCompatActivity() {
             who + (if (type.isNotEmpty()) ", $type" else "") +
                 if (s.rdsSync) ", errors ${s.rdsBler} %" else ", lost"
         )
-        if (s.rdsPs.isNotBlank()) lines += "PS \"${s.rdsPs}\""
+        if (s.rdsPs.isNotBlank()) lines += "PS \"${s.rdsPs}\"" +
+            if (s.rdsPsChanges >= Signal.PS_SCROLLING_CHANGES) " (scrolling)" else ""   // build 36
         if (s.rdsTitle.isNotBlank()) lines += "♪ " + listOf(s.rdsTitle, s.rdsArtist).filter { it.isNotBlank() }.joinToString(" – ")
         if (s.rdsRt.isNotBlank()) lines += s.rdsRt
         return listOf("RDS" to lines.joinToString("\n"))
@@ -1514,6 +1515,17 @@ class MainActivity : AppCompatActivity() {
             debugOpen = !debugOpen
             prefs.edit().putBoolean(KEY_DEBUG_OPEN, debugOpen).apply()
             showDebugOpen()
+        }
+        // Build 36: long-press the debug text = copy all of it (to paste into a message or a forum
+        // post). Replaces selecting it, which made the page snap back to it (see the layout).
+        binding.sampleText.setOnLongClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                getString(R.string.debug_copied_label), binding.sampleText.text))
+            // Android 13 and later show their own "Copied" note; older ones get ours.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+                Toast.makeText(this, R.string.debug_copied, Toast.LENGTH_SHORT).show()
+            true
         }
         // Build 12: the speed test (RadioEngine.startSpeedTestNative). It returns at once;
         // the progress and the result appear in the debug text, which refreshes every second.

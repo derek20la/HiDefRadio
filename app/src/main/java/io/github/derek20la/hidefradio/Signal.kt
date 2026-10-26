@@ -109,6 +109,7 @@ data class Signal(
                               // ("WHTZ" for XHITZ-FM's 692B) - a note for the details, never a name
     val rdsPs: String,        // the 8-character name - or scrolling text, 8 characters at a time
     val rdsPsSecs: Int,       // how long the PS has stayed the same (a real name stands still)
+    val rdsPsChanges: Int,    // build 36: how often the PS has changed on this station (scrolling text: many times)
     val rdsRt: String,        // RadioText (up to 64 characters)
     val rdsTitle: String,     // RT+ tags: song title / artist, when the station marks them
     val rdsArtist: String,
@@ -152,9 +153,15 @@ data class Signal(
      * M12: a station NAME from RDS, for stations without HD: the call letters, or the PS
      * once it has stood still for a while (LA stations love to scroll song titles through
      * the PS - that is text, not a name).
+     * Build 36: and never from a station that has been seen SCROLLING its PS - a pause in the
+     * scrolling is not a name. 91X (XETRA, 91.1, no call letters from its PI F000) scrolls the
+     * song through its PS and left the DJ's name standing during a talk break: the station was
+     * called "Matthew" (Derek, 10-26). Such a station shows its frequency instead ("91.1 FM").
      */
     val rdsName: String
-        get() = rdsCall.ifEmpty { if (rdsPsSecs >= RDS_NAME_AFTER_S) rdsPs else "" }
+        get() = rdsCall.ifEmpty {
+            if (rdsPsSecs >= RDS_NAME_AFTER_S && rdsPsChanges < PS_SCROLLING_CHANGES) rdsPs else ""
+        }
 
     /** M12: "what's on" from RDS: the tagged song title, else the whole RadioText. */
     val rdsLine1: String
@@ -199,6 +206,9 @@ data class Signal(
 
         /** M12: a PS that hasn't changed for this many seconds counts as the station's name. */
         const val RDS_NAME_AFTER_S = 15
+
+        /** Build 36: a PS that has changed this often on one station is scrolling text, never a name. */
+        const val PS_SCROLLING_CHANGES = 3
 
         // M12 step 2: hdSame values (= blend::SameStation in blend.hpp)
         const val HD_SAME_UNKNOWN = 0
@@ -304,6 +314,7 @@ data class Signal(
                 rdsCallMaybe = str("rdsCallMaybe").trim(),             // build 10
                 rdsPs = str("rdsPs").trim(),
                 rdsPsSecs = long("rdsPsSecs", 0).toInt(),
+                rdsPsChanges = long("rdsPsChanges", 0).toInt(),         // build 36
                 rdsRt = str("rdsRt").trim(),
                 rdsTitle = str("rdsTitle").trim(),
                 rdsArtist = str("rdsArtist").trim(),

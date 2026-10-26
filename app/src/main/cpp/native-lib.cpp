@@ -2386,15 +2386,15 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
     // blocks line up; rdsBler = % of blocks with errors (last ~1.5 s); rdsPi = the station's
     // code in hex ("" until confirmed); rdsCall = call letters worked out from it (North
     // America; "" if unknown); rdsPs = the 8-character name / scrolling text, rdsPsSecs =
-    // how long it has stayed the same; rdsRt = RadioText; rdsTitle / rdsArtist = RT+ tags;
+    // how long it has stayed the same, rdsPsChanges = how often it changed (build 36); rdsRt = RadioText; rdsTitle / rdsArtist = RT+ tags;
     // rdsPty = program type number (-1 unknown); rdsGroups = groups received.
     {
         rds::Status r;
         if (g_mode == NRSC5_MODE_FM && demodWanted()) { std::lock_guard<std::mutex> lock(g_rdsMutex); r = g_rds; }
         char pi[8] = "";
         if (r.piOk) snprintf(pi, sizeof(pi), "%04X", r.pi);
-        snprintf(buf, sizeof(buf), "rdsSync=%d\nrdsBler=%d\nrdsPi=%s\nrdsPsSecs=%d\nrdsPty=%d\nrdsGroups=%ld\n",
-                 r.synced ? 1 : 0, r.blerPct, pi, (int)r.psSecs, r.pty, r.groups);
+        snprintf(buf, sizeof(buf), "rdsSync=%d\nrdsBler=%d\nrdsPi=%s\nrdsPsSecs=%d\nrdsPsChanges=%d\nrdsPty=%d\nrdsGroups=%ld\n",
+                 r.synced ? 1 : 0, r.blerPct, pi, (int)r.psSecs, r.psChanges, r.pty, r.groups);
         out += buf;
         out += "rdsCall=" + clean(r.call) + "\n";
         out += "rdsPs=" + clean(r.ps) + "\n";

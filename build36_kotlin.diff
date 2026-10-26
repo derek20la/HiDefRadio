@@ -1,0 +1,79 @@
+diff --git a/app/src/main/java/io/github/derek20la/hidefradio/MainActivity.kt b/app/src/main/java/io/github/derek20la/hidefradio/MainActivity.kt
+index 87e777c..88b6809 100644
+--- a/app/src/main/java/io/github/derek20la/hidefradio/MainActivity.kt
++++ b/app/src/main/java/io/github/derek20la/hidefradio/MainActivity.kt
+@@ -1356,7 +1356,8 @@ class MainActivity : AppCompatActivity() {
+             who + (if (type.isNotEmpty()) ", $type" else "") +
+                 if (s.rdsSync) ", errors ${s.rdsBler} %" else ", lost"
+         )
+-        if (s.rdsPs.isNotBlank()) lines += "PS \"${s.rdsPs}\""
++        if (s.rdsPs.isNotBlank()) lines += "PS \"${s.rdsPs}\"" +
++            if (s.rdsPsChanges >= Signal.PS_SCROLLING_CHANGES) " (scrolling)" else ""   // build 36
+         if (s.rdsTitle.isNotBlank()) lines += "♪ " + listOf(s.rdsTitle, s.rdsArtist).filter { it.isNotBlank() }.joinToString(" – ")
+         if (s.rdsRt.isNotBlank()) lines += s.rdsRt
+         return listOf("RDS" to lines.joinToString("\n"))
+@@ -1515,6 +1516,17 @@ class MainActivity : AppCompatActivity() {
+             prefs.edit().putBoolean(KEY_DEBUG_OPEN, debugOpen).apply()
+             showDebugOpen()
+         }
++        // Build 36: long-press the debug text = copy all of it (to paste into a message or a forum
++        // post). Replaces selecting it, which made the page snap back to it (see the layout).
++        binding.sampleText.setOnLongClickListener {
++            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
++            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
++                getString(R.string.debug_copied_label), binding.sampleText.text))
++            // Android 13 and later show their own "Copied" note; older ones get ours.
++            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
++                Toast.makeText(this, R.string.debug_copied, Toast.LENGTH_SHORT).show()
++            true
++        }
+         // Build 12: the speed test (RadioEngine.startSpeedTestNative). It returns at once;
+         // the progress and the result appear in the debug text, which refreshes every second.
+         binding.speedTest.setOnClickListener {
+diff --git a/app/src/main/java/io/github/derek20la/hidefradio/Signal.kt b/app/src/main/java/io/github/derek20la/hidefradio/Signal.kt
+index 4e7086c..f05b75c 100644
+--- a/app/src/main/java/io/github/derek20la/hidefradio/Signal.kt
++++ b/app/src/main/java/io/github/derek20la/hidefradio/Signal.kt
+@@ -109,6 +109,7 @@ data class Signal(
+                               // ("WHTZ" for XHITZ-FM's 692B) - a note for the details, never a name
+     val rdsPs: String,        // the 8-character name - or scrolling text, 8 characters at a time
+     val rdsPsSecs: Int,       // how long the PS has stayed the same (a real name stands still)
++    val rdsPsChanges: Int,    // build 36: how often the PS has changed on this station (scrolling text: many times)
+     val rdsRt: String,        // RadioText (up to 64 characters)
+     val rdsTitle: String,     // RT+ tags: song title / artist, when the station marks them
+     val rdsArtist: String,
+@@ -152,9 +153,15 @@ data class Signal(
+      * M12: a station NAME from RDS, for stations without HD: the call letters, or the PS
+      * once it has stood still for a while (LA stations love to scroll song titles through
+      * the PS - that is text, not a name).
++     * Build 36: and never from a station that has been seen SCROLLING its PS - a pause in the
++     * scrolling is not a name. 91X (XETRA, 91.1, no call letters from its PI F000) scrolls the
++     * song through its PS and left the DJ's name standing during a talk break: the station was
++     * called "Matthew" (Derek, 10-26). Such a station shows its frequency instead ("91.1 FM").
+      */
+     val rdsName: String
+-        get() = rdsCall.ifEmpty { if (rdsPsSecs >= RDS_NAME_AFTER_S) rdsPs else "" }
++        get() = rdsCall.ifEmpty {
++            if (rdsPsSecs >= RDS_NAME_AFTER_S && rdsPsChanges < PS_SCROLLING_CHANGES) rdsPs else ""
++        }
+ 
+     /** M12: "what's on" from RDS: the tagged song title, else the whole RadioText. */
+     val rdsLine1: String
+@@ -200,6 +207,9 @@ data class Signal(
+         /** M12: a PS that hasn't changed for this many seconds counts as the station's name. */
+         const val RDS_NAME_AFTER_S = 15
+ 
++        /** Build 36: a PS that has changed this often on one station is scrolling text, never a name. */
++        const val PS_SCROLLING_CHANGES = 3
++
+         // M12 step 2: hdSame values (= blend::SameStation in blend.hpp)
+         const val HD_SAME_UNKNOWN = 0
+         const val HD_SAME_YES = 1
+@@ -304,6 +314,7 @@ data class Signal(
+                 rdsCallMaybe = str("rdsCallMaybe").trim(),             // build 10
+                 rdsPs = str("rdsPs").trim(),
+                 rdsPsSecs = long("rdsPsSecs", 0).toInt(),
++                rdsPsChanges = long("rdsPsChanges", 0).toInt(),         // build 36
+                 rdsRt = str("rdsRt").trim(),
+                 rdsTitle = str("rdsTitle").trim(),
+                 rdsArtist = str("rdsArtist").trim(),

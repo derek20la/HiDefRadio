@@ -605,11 +605,14 @@
                 android:layout_marginTop="16dp"
                 android:text="@string/show_debug" />
 
+            <!-- Build 36: NOT selectable any more (it was since build 5). A selectable TextView can take
+                 focus, and a focused one makes the page scroll back to it every time its text changes -
+                 once a second: scrolling up to the favorites snapped back down (Derek, 10-26, Moto).
+                 A long-press copies the whole text instead (MainActivity). -->
             <TextView
                 android:id="@+id/sample_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textIsSelectable="true"
                 android:textSize="12sp"
                 android:visibility="gone" />
 

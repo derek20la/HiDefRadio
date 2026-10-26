@@ -139,6 +139,9 @@ struct Status {
                                 // 1xxx PI whose candidates never showed up in the station's own text)
     std::string ps;             // the 8-character name / scrolling text ("" until confirmed)
     float psSecs = 0;           // how long the PS has stayed the same (a static name stays; a scrolling one keeps changing)
+    int psChanges = 0;          // build 36: how often the PS changed since it was first confirmed (a scrolling PS:
+                                // dozens; a station name: 0). Signal.kt: after a few, a PS that stands still for
+                                // a while is still not taken as the station's name (91X's "Matthew", 10-26).
     std::string rt;             // RadioText (the last complete message)
     std::string title, artist;  // RT+ tags, when the station sends them
     int pty = -1;               // program type 0-31 (-1 = not known); the names differ between RBDS and RDS
@@ -224,7 +227,7 @@ public:
         s.synced = synced_; s.blerPct = blerPct();
         s.piOk = piOk; s.pi = piCur;
         if (piOk) s.call = (piCur >> 12) == 1 ? callSeen : callFromPi(piCur);
-        if (psOk) { s.ps = toUtf8(psPub, 8); s.psSecs = (float)((bitNo - psSince) / BIT_RATE); }
+        if (psOk) { s.ps = toUtf8(psPub, 8); s.psSecs = (float)((bitNo - psSince) / BIT_RATE); s.psChanges = psChanges; }
         s.rt = toUtf8(rtPub, rtPubLen);
         s.title = toUtf8(title, titleLen); s.artist = toUtf8(artist, artistLen);
         s.pty = pty; s.tp = tp; s.ta = ta;
@@ -428,7 +431,7 @@ private:
     // ================= groups =================
     void clearText() {
         std::memset(psVal, 0, sizeof(psVal)); std::memset(psCnt, 0, sizeof(psCnt)); std::memset(psBit, 0, sizeof(psBit));
-        psOk = false; std::memset(psPub, ' ', sizeof(psPub)); psSince = 0;
+        psOk = false; std::memset(psPub, ' ', sizeof(psPub)); psSince = 0; psChanges = 0;
         rtClear(); rtFlagKnown = false; rtPubLen = 0;
         rtpCode = -1; rtpCodeCand = -1;
         titleLen = artistLen = 0; callSeen.clear();
@@ -501,6 +504,7 @@ private:
         uint8_t now[8];
         for (int i = 0; i < 4; i++) { now[2 * i] = (uint8_t)(psVal[i] >> 8); now[2 * i + 1] = (uint8_t)psVal[i]; }
         if (psOk && std::memcmp(now, psPub, 8) == 0) return;
+        if (psOk) psChanges++;                               // build 36: a new text where a confirmed one stood
         std::memcpy(psPub, now, 8); psOk = true; psSince = bitNo; serial_++;
         lookForCall(psPub, 8);
     }
@@ -608,7 +612,7 @@ private:
     Seen seenA[64]; int seenPos = 0;
     int pty = -1, ptyCand = -1, ptyCnt = 0; bool tp = false, ta = false;
     uint16_t psVal[4] = {}; int psCnt[4] = {}; long psBit[4] = {}, psSince = 0;
-    bool psOk = false; uint8_t psPub[8] = {};
+    bool psOk = false; uint8_t psPub[8] = {}; int psChanges = 0;
     uint16_t rtVal[32] = {}, rtTent[32] = {}; int rtCnt[32] = {}; bool rtTentOk[32] = {};
     bool rtFlag = false, rtFlagKnown = false, rtDone = false;
     int rtFlagVotes = 0, rtMaxCell = -1, rtWraps = 0, rtLastCell = -1, rtPubLen = 0;
