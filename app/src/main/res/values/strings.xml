@@ -110,8 +110,12 @@
     <string name="setting_tcp_host">rtl_tcp server</string>
     <string name="setting_tcp_port">rtl_tcp port</string>
     <string name="setting_tcp_host_hint">e.g. 192.168.1.20 or raspberrypi.local</string>
-    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp, and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. On Android 17 and later, Android asks once for \"Nearby devices\" (local network access) the first time you start the radio this way. Takes effect the next time you start the radio.</string>
+    <string name="setting_source_help">rtl_tcp: the dongle sits on a PC or Raspberry Pi running rtl_tcp, and the phone gets the samples over your Wi-Fi - the antenna can be anywhere, and the phone can charge while it plays. It needs a steady 24 Mbit/s, so use 5 GHz Wi-Fi or a wired server. This is the only thing the app uses the network for. On Android 17 and later, Android asks once for \"Nearby devices\" (local network access) the first time you start the radio this way. A dongle plugged into the phone always comes first.</string>
     <string name="tcp_connecting">Connecting to %1$s…</string>
+    <!-- Build 35: a dongle plugged into the phone wins over rtl_tcp -->
+    <string name="usb_instead_of_tcp">USB dongle found - playing from it instead of the rtl_tcp server.</string>
+    <string name="usb_switched_from_tcp">USB dongle plugged in - switched to it from the rtl_tcp server.</string>
+    <string name="usb_switch_failed">The USB dongle couldn\'t be opened. Unplug it and plug it in again, or start the radio again for the rtl_tcp server.</string>
     <string name="tcp_vpn_hint">A VPN is on - it may be sending this connection elsewhere. Turn it off, or allow LAN access in the VPN app.</string>   <!-- build 25 -->
     <string name="tcp_lost">Lost the connection to the rtl_tcp server at %1$s</string>
     <string name="hint_tcp_server">Source: rtl_tcp server at %1$s</string>

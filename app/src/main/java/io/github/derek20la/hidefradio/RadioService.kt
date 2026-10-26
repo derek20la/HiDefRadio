@@ -195,6 +195,11 @@ class RadioService : Service() {
             this, detachReceiver,
             IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
+        // Build 35: a dongle plugged in while playing from rtl_tcp -> switch to it (dongleArrived).
+        ContextCompat.registerReceiver(
+            this, attachReceiver,
+            IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
+            ContextCompat.RECEIVER_NOT_EXPORTED)
         // M10a: headphones unplugged / Bluetooth disconnected -> pause.
         // (A message from Android itself, so "not exported" still receives it.)
         ContextCompat.registerReceiver(
@@ -241,6 +246,8 @@ class RadioService : Service() {
     override fun onDestroy() {
         stopRadio()
         unregisterReceiver(detachReceiver)
+        unregisterReceiver(attachReceiver)      // build 35
+        handler.removeCallbacks(usbWaiter)
         unregisterReceiver(noisyReceiver)
         Settings.prefs(this).unregisterOnSharedPreferenceChangeListener(settingsListener)
         session.release()                                                 // M10a
@@ -858,6 +865,83 @@ class RadioService : Service() {
         }
     }
 
+    // ------------------------------------------------------------------ build 35: the dongle wins
+
+    // Rule (Derek, 10-26): a dongle plugged into the phone always comes first. Settings > Source
+    // stays as it is; the dongle only wins while it is plugged in. At the START that is
+    // MainActivity.findAndStartRadio's job; WHILE PLAYING from rtl_tcp it is done here: plugging
+    // a dongle in switches to it at once (a few seconds of silence, the station is kept). When
+    // it is unplugged the radio stops as always, and the next start is rtl_tcp again.
+
+    /** Android: a USB device was plugged in. (MainActivity also hears of it - see preferUsb.) */
+    private val attachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val dev = IntentCompat.getParcelableExtra(
+                intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            if (dev != null && Dongles.isSupported(this@RadioService, dev)) dongleArrived(dev)
+        }
+    }
+
+    /** MainActivity (opened, or told a dongle was plugged in): on rtl_tcp with a dongle there -> switch. */
+    fun preferUsb() {
+        if (!tcpOpen && !tcpConnecting) return
+        Dongles.find(this)?.let { dongleArrived(it) }
+    }
+
+    private var waitingDongle: UsbDevice? = null
+    private var waitedMs = 0L
+
+    /**
+     * A dongle is there while we play from rtl_tcp (or are still connecting). The app may only
+     * use it once Android allows it: when the dongle is plugged in, Android itself asks "Open
+     * HiDef Radio ...?", and a yes gives that permission. So: switch now if we have it, else
+     * check once a second for a while ([USB_WAIT_MS]) - no second question from us. Still
+     * connecting to the server: wait for that first (the native side opens one source at a time).
+     */
+    private fun dongleArrived(dev: UsbDevice) {
+        if (!tcpOpen && !tcpConnecting) return
+        waitingDongle = dev
+        waitedMs = 0L
+        handler.removeCallbacks(usbWaiter)
+        usbWaiter.run()
+    }
+
+    private val usbWaiter = object : Runnable {
+        override fun run() {
+            val dev = waitingDongle ?: return
+            when {
+                !tcpOpen && !tcpConnecting -> waitingDongle = null          // rtl_tcp ended meanwhile
+                tcpOpen && usbManager.hasPermission(dev) -> {
+                    waitingDongle = null
+                    switchToUsb(dev)
+                }
+                waitedMs >= USB_WAIT_MS -> {
+                    waitingDongle = null                                      // no permission: stay on rtl_tcp
+                    Log.i(TAG, "Dongle plugged in, but no permission to use it - staying on rtl_tcp")
+                }
+                else -> {
+                    waitedMs += USB_WAIT_STEP_MS
+                    handler.postDelayed(this, USB_WAIT_STEP_MS)
+                }
+            }
+        }
+    }
+
+    /** rtl_tcp off, the dongle on - same station, same program; the service and its notification stay. */
+    private fun switchToUsb(dev: UsbDevice) {
+        if (!tcpOpen) return
+        Log.i(TAG, "Dongle plugged in - switching from rtl_tcp to ${dev.productName}")
+        stopRadio()                             // saves a recording, closes the server's connection
+        lastProblem = ""
+        if (startRadio(dev)) {
+            Toast.makeText(applicationContext, R.string.usb_switched_from_tcp, Toast.LENGTH_LONG).show()
+            updateNotification()
+        } else {
+            problem(getString(R.string.usb_switch_failed))
+            stopEverything()
+        }
+    }
+
     // ------------------------------------------------------------------ pause, presets (M10a)
 
     /**
@@ -1464,6 +1548,8 @@ class RadioService : Service() {
         private const val GAIN_TICK_MS = 1_000L           // M10c: gain watchdog, once a second
         private const val ALIGN_TICK_MS = 2_000L          // 11c: ask the aligner every 2 s
         private const val REMEMBER_GAIN_AFTER_MS = 20_000L   // M10c: gain unchanged this long -> remember it
+        private const val USB_WAIT_MS = 30_000L           // build 35: wait this long for "allow the dongle"
+        private const val USB_WAIT_STEP_MS = 1_000L
 
         // First-run station: 101.1 MHz KRTH (K-EARTH 101), HD1 + HD2.
         // Decodes perfectly in nrsc5-dui on Derek's Mac: MER ~14 dB, BER 0.000%.

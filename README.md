@@ -6,7 +6,7 @@ An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with
 
 No root, no computer, no internet connection needed (a dongle on another computer over your Wi-Fi works too, since 1.2). Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
-> **Status: 1.2.1.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.3.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
@@ -61,6 +61,8 @@ No root, no computer, no internet connection needed (a dongle on another compute
 ### The dongle somewhere else: rtl_tcp (1.2)
 
 Settings → Source → **rtl_tcp server on the network**: the dongle sits on a PC or a Raspberry Pi running `rtl_tcp` (for a V4 it must be the build from the [RTL-SDR Blog drivers](https://github.com/rtlsdrblog/rtl-sdr-blog)), with the antenna wherever reception is best, and the phone gets the samples over Wi-Fi. No OTG cable, and the phone can charge while the radio plays. Everything else works as with a dongle on the phone. It needs a steady 24 Mbit/s (1.49 million sample pairs a second), so use 5 GHz Wi-Fi or a server on a cable; a slower link makes the sound stutter. On the server: `rtl_tcp -a 0.0.0.0` (it listens on port 1234). rtl_tcp has no password and sends to anyone who connects, so keep it on your home network.
+
+A dongle plugged into the phone always comes first (since 1.3): with one plugged in, the radio plays from it even when the source is rtl_tcp, and plugging one in while rtl_tcp plays switches to it at once. The setting stays as it is - unplug the dongle, and the next start is rtl_tcp again.
 
 **Android 17 and later** ask before an app may connect to anything on your home network. The first time you start the radio with the rtl_tcp source, the app explains why and Android asks to allow **Nearby devices** (local network access); without it the server can't be reached. If you said no, allow it later in Android's settings: Apps > HiDef Radio > Permissions > Nearby devices (since 1.2.1).
 
@@ -213,7 +215,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 - **1.1** (done): analog AM with the blend and C-QUAM AM stereo, NRSC AM de-emphasis, a stereo dot on the frequency display, export / import of favorites.
 - **1.2** (done): an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi; our nrsc5 fork (a faster HD search, the right left / right in HD audio, MER named by its true sideband); a screen rotation setting.
 - **1.2.1** (done): the blend on stations whose analog is processed very differently from their HD (it aligns sooner, stays aligned, and comes back to the HD after a dropout); rtl_tcp on AM: the Gain row says so when the server's dongle ignores the gain (a V3 in direct sampling); rtl_tcp on Android 17: asks for the new local network permission ("Nearby devices"), without which the server can't be reached.
-- **1.3**: recording - audio (AAC) and IQ (.cu8, with a time limit), to a folder you choose.
+- **1.3**: recording - audio (AAC) and IQ (.cu8, with a time limit), to a folder you choose; a dongle plugged into the phone wins over rtl_tcp.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses

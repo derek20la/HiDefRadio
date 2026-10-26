@@ -54,7 +54,6 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import io.github.derek20la.hidefradio.databinding.ActivityMainBinding
 import io.github.derek20la.hidefradio.databinding.ItemPresetBinding
-import org.xmlpull.v1.XmlPullParser
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -263,7 +262,7 @@ class MainActivity : AppCompatActivity() {
         hintColors = binding.statusHint.textColors      // 9h
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
-        supportedIds = loadSupportedIds()
+        supportedIds = Dongles.supportedIds(this)      // build 35: Dongles.kt (the service needs the list too)
         setUpTuning()
         // Build 7: when the display's width is known (and whenever it changes), make the
         // digits fit - see fitVfd(). Posted: a text size must not be changed inside a layout pass.
@@ -712,8 +711,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateStatusHint(service: RadioService?) {
         val hint = binding.statusHint
-        if (service == null && Settings.useTcp(this)) {
+        val dongleIn = usbManager.deviceList.values.any { d -> Pair(d.vendorId, d.productId) in supportedIds }
+        if (service == null && Settings.useTcp(this) && !dongleIn) {
             // 1.2: the source is an rtl_tcp server: say which one, or why the last try failed.
+            // (Build 35: unless a dongle is plugged in - it wins, see findAndStartRadio.)
             val problem = RadioService.lastProblem
             val host = Settings.tcpHost(this)
             hint.text = when {
@@ -727,10 +728,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (service == null) {
-            val dongle = usbManager.deviceList.values.any { d ->
-                Pair(d.vendorId, d.productId) in supportedIds
-            }
-            if (dongle) {
+            if (dongleIn) {
                 hint.visibility = View.GONE
             } else {
                 hint.text = getString(R.string.hint_plug_in)
@@ -2063,28 +2061,25 @@ class MainActivity : AppCompatActivity() {
 
     /** Look for a supported dongle; get permission; start the radio service. */
     private fun findAndStartRadio() {
-        if (RadioService.instance != null) return   // already playing
+        // Already playing. Build 35: on rtl_tcp with a dongle plugged in meanwhile (this is also
+        // where Android's "dongle plugged in" lands, onNewIntent) -> the service switches to it.
+        RadioService.instance?.let { it.preferUsb(); return }
 
-        // 1.2: Settings > Source = rtl_tcp server: no USB dongle to look for - the service
-        // connects to the server (the line under the station name says to which, or what failed).
-        if (Settings.useTcp(this)) {
-            val host = Settings.tcpHost(this)
-            if (host.isEmpty()) { showMessage(""); return }       // the status line says "set a server"
-            // Build 33: Android 17+ blocks the home network until the listener allows it - ask first
-            // (a word on why, then Android's question); the answer starts the radio or says how to allow it.
-            if (!LocalNetwork.allowed(this)) { askForLocalNetwork("$host:${Settings.tcpPort(this)}"); return }
-            showMessage(getString(R.string.tcp_connecting, "$host:${Settings.tcpPort(this)}"))
-            val intent = Intent(this, RadioService::class.java)
-                .setAction(RadioService.ACTION_START)
-                .putExtra(RadioService.EXTRA_TCP_HOST, host)
-                .putExtra(RadioService.EXTRA_TCP_PORT, Settings.tcpPort(this))
-            ContextCompat.startForegroundService(this, intent)
-            return
-        }
-
+        // Build 35: a dongle plugged into the phone WINS, whatever Settings > Source says. The
+        // setting itself stays as it is: unplug the dongle, and the next start is rtl_tcp again.
         val device = usbManager.deviceList.values.firstOrNull { d ->
             Pair(d.vendorId, d.productId) in supportedIds
         }
+
+        // 1.2: Settings > Source = rtl_tcp server (and no dongle on the phone): the service
+        // connects to the server (the line under the station name says to which, or what failed).
+        if (Settings.useTcp(this) && device == null) {
+            startTcp()
+            return
+        }
+        if (device != null && Settings.useTcp(this))
+            Toast.makeText(this, R.string.usb_instead_of_tcp, Toast.LENGTH_LONG).show()
+
         if (device == null) {
             // 9h: the status line under the station name says "Plug in the
             // RTL-SDR" (and stays until you do), so no message here.
@@ -2098,6 +2093,21 @@ class MainActivity : AppCompatActivity() {
             showMessage("Found ${describe(device)}. Asking for permission…")
             requestPermission(device)
         }
+    }
+
+    /** 1.2: start the radio on the rtl_tcp server of Settings > Source (build 35: its own function). */
+    private fun startTcp() {
+        val host = Settings.tcpHost(this)
+        if (host.isEmpty()) { showMessage(""); return }       // the status line says "set a server"
+        // Build 33: Android 17+ blocks the home network until the listener allows it - ask first
+        // (a word on why, then Android's question); the answer starts the radio or says how to allow it.
+        if (!LocalNetwork.allowed(this)) { askForLocalNetwork("$host:${Settings.tcpPort(this)}"); return }
+        showMessage(getString(R.string.tcp_connecting, "$host:${Settings.tcpPort(this)}"))
+        val intent = Intent(this, RadioService::class.java)
+            .setAction(RadioService.ACTION_START)
+            .putExtra(RadioService.EXTRA_TCP_HOST, host)
+            .putExtra(RadioService.EXTRA_TCP_PORT, Settings.tcpPort(this))
+        ContextCompat.startForegroundService(this, intent)
     }
 
     /**
@@ -2165,27 +2175,15 @@ class MainActivity : AppCompatActivity() {
             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
             if (granted && device != null) {
                 startRadioService(device)
+            } else if (Settings.useTcp(this@MainActivity) && RadioService.instance == null) {
+                // Build 35: no to the dongle, but there is an rtl_tcp server set: play from that.
+                Log.i(TAG, "USB permission denied - using the rtl_tcp server")
+                startTcp()
             } else {
                 Log.i(TAG, "USB permission denied")
                 showMessage("USB permission was denied.")
             }
         }
-    }
-
-    /** Reads the vendor/product ID pairs out of res/xml/device_filter.xml. */
-    private fun loadSupportedIds(): Set<Pair<Int, Int>> {
-        val ids = mutableSetOf<Pair<Int, Int>>()
-        val parser = resources.getXml(R.xml.device_filter)
-        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-            if (parser.eventType == XmlPullParser.START_TAG && parser.name == "usb-device") {
-                val vid = parser.getAttributeIntValue(null, "vendor-id", -1)
-                val pid = parser.getAttributeIntValue(null, "product-id", -1)
-                ids.add(Pair(vid, pid))
-            }
-            parser.next()
-        }
-        parser.close()
-        return ids
     }
 
     /** e.g. "RTL2838UHIDIR (0bda:2838)" */
