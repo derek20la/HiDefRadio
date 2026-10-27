@@ -6,7 +6,7 @@ An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with
 
 No root, no computer, no internet connection needed (a dongle on another computer over your Wi-Fi works too, since 1.2). Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
-> **Status: 1.3.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.3.1.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
