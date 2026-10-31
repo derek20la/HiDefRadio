@@ -178,6 +178,7 @@ class MainActivity : AppCompatActivity() {
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
     private var detailsOpen = false
+    private var paneDetailsOpen = true       // the same on a tablet: its details pane (remembered apart)
     // Build 15: a tablet at least 720 dp wide (smallest side >= 600 dp, width >= 720 dp right now) uses
     // layout-sw600dp-w720dp/activity_main.xml, where the details have a pane of their own and are
     // always open. From res/values(-sw600dp-w720dp)/bools.xml - always the same answer as the layout.
@@ -960,11 +961,17 @@ class MainActivity : AppCompatActivity() {
         }
         binding.otherHdNotice.visibility = if (other) View.VISIBLE else View.GONE
 
-        // Build 15: on a tablet the details are always open (their own pane; the arrow is hidden there).
-        val open = detailsOpen || twoPane
+        // Build 15: on a tablet the details have their own pane, opened and closed by its heading
+        // (the arrow is hidden there). Closed, the traffic and weather maps take their place; on
+        // a phone they only appear when there's a map to show.
+        val open = if (twoPane) paneDetailsOpen else detailsOpen
         binding.signalArrow.text = if (open) "▴" else "▾"
+        binding.detailsHeading?.text = getString(R.string.details_heading) + if (open) "  ▴" else "  ▾"
         binding.signalTable.visibility = if (open) View.VISIBLE else View.GONE
         if (open) showDetails(signalDetails(running, s, weak))
+        val haveMaps = MapFeed.traffic != null || MapFeed.frames.isNotEmpty()
+        binding.mapPanel.visibility = if (!open && (haveMaps || twoPane)) View.VISIBLE else View.GONE
+        if (!open) binding.mapPanel.refresh()
     }
 
     /**
@@ -1498,6 +1505,7 @@ class MainActivity : AppCompatActivity() {
     private fun setUpToggles() {
         val prefs = getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE)
         detailsOpen = prefs.getBoolean(KEY_DETAILS_OPEN, false)
+        paneDetailsOpen = prefs.getBoolean(KEY_PANE_DETAILS_OPEN, true)
         debugOpen = prefs.getBoolean(KEY_DEBUG_OPEN, false)
         showDebugOpen()
 
@@ -1505,13 +1513,20 @@ class MainActivity : AppCompatActivity() {
             RadioService.instance?.listenToOtherStation()
             refreshScreen()
         }
-        // Build 15: on a tablet the box is not a button (the details pane is always open);
+        // On a tablet both the box and the pane's heading open and close the details;
         // detailsOpen keeps the phone's choice for when the app is next opened on a phone.
-        if (!twoPane) binding.signalBox.setOnClickListener {
-            detailsOpen = !detailsOpen
-            prefs.edit().putBoolean(KEY_DETAILS_OPEN, detailsOpen).apply()
+        val toggleDetails = View.OnClickListener {
+            if (twoPane) {
+                paneDetailsOpen = !paneDetailsOpen
+                prefs.edit().putBoolean(KEY_PANE_DETAILS_OPEN, paneDetailsOpen).apply()
+            } else {
+                detailsOpen = !detailsOpen
+                prefs.edit().putBoolean(KEY_DETAILS_OPEN, detailsOpen).apply()
+            }
             refreshScreen()
         }
+        binding.signalBox.setOnClickListener(toggleDetails)
+        binding.detailsHeading?.setOnClickListener(toggleDetails)
         binding.debugToggle.setOnClickListener {
             debugOpen = !debugOpen
             prefs.edit().putBoolean(KEY_DEBUG_OPEN, debugOpen).apply()
@@ -2262,6 +2277,7 @@ class MainActivity : AppCompatActivity() {
         private const val VFD_DIGITS_SP = 44f           // the frequency digits at full size (as in activity_main.xml)
         private const val VFD_DIGITS_TABLET_SP = 56f    // build 15: the same on a tablet (layout-sw600dp-w720dp/activity_main.xml)
         private const val KEY_DETAILS_OPEN = "details_open"
+        private const val KEY_PANE_DETAILS_OPEN = "pane_details_open"
         private const val KEY_DEBUG_OPEN = "debug_open"
     }
 }

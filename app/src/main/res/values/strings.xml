@@ -28,6 +28,12 @@
     <string name="debug_copied_label">HiDef Radio debug info</string>
     <!-- Build 12: the speed test button in the debug info -->
     <string name="speed_test">Run speed test</string>
+    <string name="map_traffic">Traffic</string>
+    <string name="map_weather">Weather</string>
+    <string name="map_waiting_traffic">Waiting for a traffic map. Not every station sends one.</string>
+    <string name="map_waiting_weather">Waiting for weather radar. Not every station sends it.</string>
+    <string name="map_updated">Updated %1$s</string>
+    <string name="map_radar_time">%1$s (%2$d of %3$d)</string>
     <string name="details_heading">Signal details</string>          <!-- build 15: title of the tablet details pane -->
     <string name="speed_test_no_radio">Start the radio first</string>
     <string name="signal_off">Radio off</string>

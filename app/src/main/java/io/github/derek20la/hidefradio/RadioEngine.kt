@@ -95,6 +95,12 @@ object RadioEngine {
     external fun getPictureGenNative(): Int
 
     /** The logo file (PNG/JPEG bytes) of [program] (else the station-wide one), or null. */
+    /** Goes up when the station changes: traffic and weather so far are another station's. */
+    external fun getMapEpochNative(): Int
+
+    /** The next traffic or weather file, or null: a line of text, then the file (MapFeed). */
+    external fun takeMapItemNative(): ByteArray?
+
     external fun getLogoNative(program: Int): ByteArray?
 
     /** The album art that goes with [program]'s current song, or null. */

@@ -395,6 +395,7 @@ class RadioService : Service() {
         handler.post(notificationUpdater)
         handler.postDelayed(gainWatcher, GAIN_TICK_MS)   // M10c
         handler.postDelayed(alignWatcher, ALIGN_TICK_MS) // 11c
+        handler.postDelayed(mapWatcher, MAP_TICK_MS)
     }
 
     /**
@@ -647,6 +648,14 @@ class RadioService : Service() {
     // ------------------------------------------------------------------ gain watchdog (M10c)
 
     /** Once a second while the radio is on. */
+    /** Collects the traffic and weather maps, on screen or not. */
+    private val mapWatcher = object : Runnable {
+        override fun run() {
+            MapFeed.poll(this@RadioService)
+            handler.postDelayed(this, MAP_TICK_MS)
+        }
+    }
+
     private val gainWatcher = object : Runnable {
         override fun run() {
             watchGain()
@@ -806,6 +815,7 @@ class RadioService : Service() {
         handler.removeCallbacks(notificationUpdater)
         handler.removeCallbacks(gainWatcher)    // M10c
         handler.removeCallbacks(alignWatcher)   // 11c
+        handler.removeCallbacks(mapWatcher)
         gainKeeper = null
         handler.removeCallbacks(wantedChecker)  // 9e
         wantedProgram = -1
@@ -1548,6 +1558,7 @@ class RadioService : Service() {
         private const val MAX_PICTURE_PX = 720            // M10a: notification picture size limit
         private const val PICTURE_NONE = "none"           // M12 step 2: nowPlaying() wants no picture
         private const val GAIN_TICK_MS = 1_000L           // M10c: gain watchdog, once a second
+        private const val MAP_TICK_MS = 2_000L            // traffic and weather files
         private const val ALIGN_TICK_MS = 2_000L          // 11c: ask the aligner every 2 s
         private const val REMEMBER_GAIN_AFTER_MS = 20_000L   // M10c: gain unchanged this long -> remember it
         private const val USB_WAIT_MS = 30_000L           // build 35: wait this long for "allow the dongle"

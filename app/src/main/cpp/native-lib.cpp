@@ -1,3 +1,5 @@
+#include <deque>
+#include <cstring>
 #include <jni.h>
 #include <string>
 #include <thread>          // std::thread - the background streaming thread
@@ -910,10 +912,35 @@ Java_io_github_derek20la_hidefradio_RadioEngine_closeDongleNative(
 
 // ======================= Milestone 6: decoding =======================
 
+// Traffic and weather maps: stations with a traffic service send picture tiles and radar overlays
+// as files (TTN: TMT_*, DWRI_*, DWRO_*) or as HERE images. They're kept in a short queue for Kotlin
+// (MapFeed), which stitches them; it empties the queue every couple of seconds, so the limit is
+// only there for when the app is held up. One line of tab-separated text, then the file:
+//   kind, name, lat1, lon1, lat2, lon2
+// kind: L = a LOT file, T = a HERE traffic tile, W = a HERE weather image. Under g_statusMutex.
+static std::deque<std::string> g_mapItems;
+static std::atomic<int> g_mapEpoch{0};          // goes up when the station changes
+static const size_t MAX_MAP_ITEMS = 64;
+
+static void queueMapItem(char kind, const char *name, float lat1, float lon1, float lat2, float lon2,
+                         const uint8_t *data, size_t size) {
+    if (data == nullptr || size == 0) return;
+    char head[256];
+    snprintf(head, sizeof head, "%c\t%s\t%.5f\t%.5f\t%.5f\t%.5f\n", kind, name ? name : "", lat1, lon1, lat2, lon2);
+    std::string item(head);
+    item.append(reinterpret_cast<const char *>(data), size);
+    g_mapItems.push_back(std::move(item));
+    while (g_mapItems.size() > MAX_MAP_ITEMS) g_mapItems.pop_front();
+}
+
 // 9d step 3: a complete LOT file arrived. Called from onNrsc5Event, with
 // g_statusMutex held. Decide what it is and which program it belongs to.
 static void onLotFile(const nrsc5_event_t *evt) {
     const char *name = evt->lot.name ? evt->lot.name : "";
+    if (strncmp(name, "TMT_", 4) == 0 || strncmp(name, "DWRI_", 5) == 0 || strncmp(name, "DWRO_", 5) == 0) {
+        queueMapItem('L', name, 0, 0, 0, 0, evt->lot.data, evt->lot.size);
+        return;
+    }
     uint32_t mime = evt->lot.component ? evt->lot.component->data.mime : 0;
 
     // Which program? The file travels inside a SIG service. If that's an
@@ -1143,6 +1170,12 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
         case NRSC5_EVENT_LOT:
             onLotFile(evt);   // 9d step 3: a logo or album art (or something else)
             break;
+        case NRSC5_EVENT_HERE_IMAGE:
+            queueMapItem(evt->here_image.image_type == NRSC5_HERE_IMAGE_TRAFFIC ? 'T' : 'W', evt->here_image.name,
+                         evt->here_image.latitude1, evt->here_image.longitude1,
+                         evt->here_image.latitude2, evt->here_image.longitude2,
+                         evt->here_image.data, evt->here_image.size);
+            break;
         case NRSC5_EVENT_AUDIO:
             // Real decoded audio (16-bit stereo, 44,100 Hz). nrsc5 decodes ALL
             // programs; each event says which one this audio belongs to.
@@ -1353,6 +1386,8 @@ static void forgetHdStatus() {
     g_otherLots = 0;
     g_lastLot.clear();
     g_pictureGen++;                      // tells Kotlin "pictures changed"
+    g_mapItems.clear();                  // ... and its traffic and weather
+    g_mapEpoch++;
 }
 
 // ---- Build 12: one lock around every nrsc5 open and close ----
@@ -2550,6 +2585,27 @@ static jbyteArray toJBytes(JNIEnv *env, const Picture *p) {
         env->SetByteArrayRegion(arr, 0, (jsize)p->bytes.size(),
                                 reinterpret_cast<const jbyte *>(p->bytes.data()));
     return arr;
+}
+
+// Kotlin (RadioEngine): external fun getMapEpochNative(): Int
+extern "C" JNIEXPORT jint JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_getMapEpochNative(JNIEnv*, jobject) {
+    return g_mapEpoch.load();
+}
+
+// Kotlin (RadioEngine): external fun takeMapItemNative(): ByteArray?   (see queueMapItem)
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_io_github_derek20la_hidefradio_RadioEngine_takeMapItemNative(JNIEnv* env, jobject) {
+    std::string item;
+    {
+        std::lock_guard<std::mutex> lock(g_statusMutex);
+        if (g_mapItems.empty()) return nullptr;
+        item = std::move(g_mapItems.front());
+        g_mapItems.pop_front();
+    }
+    jbyteArray out = env->NewByteArray((jsize)item.size());
+    if (out != nullptr) env->SetByteArrayRegion(out, 0, (jsize)item.size(), reinterpret_cast<const jbyte *>(item.data()));
+    return out;
 }
 
 // Kotlin (RadioEngine): external fun getLogoNative(program: Int): ByteArray?

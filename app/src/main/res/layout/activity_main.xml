@@ -517,6 +517,14 @@
                     tools:text="⚠ The HD here is KSOF (another station) - tap to listen"
                     tools:visibility="visible" />
 
+                <!-- Traffic and weather, while the signal details are closed. -->
+                <io.github.derek20la.hidefradio.MapPanel
+                    android:id="@+id/map_panel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:visibility="gone" />
+
                 <!-- ===== The old status text, now hidden behind a button ===== -->
                 <Button
                     android:id="@+id/debug_toggle"
