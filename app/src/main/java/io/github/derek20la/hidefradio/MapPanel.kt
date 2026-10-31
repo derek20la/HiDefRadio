@@ -65,16 +65,16 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
         note.textSize = 12f
         addView(note, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
-        image.adjustViewBounds = true
-        image.scaleType = ImageView.ScaleType.FIT_CENTER
-        addView(image, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-
         radarRow.gravity = Gravity.CENTER_VERTICAL
         playButton.text = PLAY
         playButton.setOnClickListener { setPlaying(!playing) }
         radarRow.addView(playButton)
         radarRow.addView(slider, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        addView(radarRow)
+        addView(radarRow)          // (above the map, which can fill the pane)
+
+        image.adjustViewBounds = true
+        image.scaleType = ImageView.ScaleType.FIT_CENTER
+        addView(image, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
