@@ -18,6 +18,7 @@ import java.util.Date
 /**
  * The traffic and weather maps (MapFeed), under the signal line while the signal details are
  * closed: two tabs, the map, and for the radar a slider through the frames and a play button.
+ * The radar plays by itself once there are two frames, until someone pauses it or uses the slider.
  */
 class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) :
     LinearLayout(context, attrs) {
@@ -36,11 +37,12 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
     private var frame = 0
     private var frameShown: MapFeed.WeatherFrame? = null
     private var playing = false
+    private var autoPlay = true
 
     private val player = object : Runnable {
         override fun run() {
             val frames = MapFeed.frames
-            if (!playing || frames.size < 2) {
+            if (!playing || frames.size < 2 || !isShown) {
                 setPlaying(false)
                 return
             }
@@ -54,6 +56,7 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
         orientation = VERTICAL
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         showWeather = prefs.getBoolean(KEY_WEATHER, false)
+        autoPlay = prefs.getBoolean(KEY_AUTOPLAY, true)
 
         val tabs = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         tabs.addView(trafficTab)
@@ -67,7 +70,10 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
 
         radarRow.gravity = Gravity.CENTER_VERTICAL
         playButton.text = PLAY
-        playButton.setOnClickListener { setPlaying(!playing) }
+        playButton.setOnClickListener {
+            setPlaying(!playing)
+            setAutoPlay(playing)
+        }
         radarRow.addView(playButton)
         radarRow.addView(slider, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         addView(radarRow)          // (above the map, which can fill the pane)
@@ -79,6 +85,7 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
                 setPlaying(false)
+                setAutoPlay(false)
                 frame = progress
                 show()
             }
@@ -101,6 +108,11 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
 
     private fun max(a: Int, b: Int) = if (a > b) a else b
 
+    private fun setAutoPlay(on: Boolean) {
+        autoPlay = on
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_AUTOPLAY, on).apply()
+    }
+
     private fun setPlaying(on: Boolean) {
         playing = on
         playButton.text = if (on) PAUSE else PLAY
@@ -110,11 +122,13 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
 
     /** Called once a second by the screen; only does something when there's something new. */
     fun refresh() {
-        if (seen == MapFeed.generation) return
-        val atNewest = frame >= MapFeed.frames.size - 2     // (stays on the newest as frames come in)
-        seen = MapFeed.generation
-        if (atNewest || frame >= MapFeed.frames.size) frame = max(0, MapFeed.frames.size - 1)
-        show()
+        if (seen != MapFeed.generation) {
+            val atNewest = frame >= MapFeed.frames.size - 2     // (stays on the newest as frames come in)
+            seen = MapFeed.generation
+            if (atNewest || frame >= MapFeed.frames.size) frame = max(0, MapFeed.frames.size - 1)
+            show()
+        }
+        if (autoPlay && showWeather && !playing && MapFeed.frames.size > 1) setPlaying(true)
     }
 
     private fun show() {
@@ -165,6 +179,7 @@ class MapPanel @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
     private companion object {
         const val PREFS = "map_panel"
         const val KEY_WEATHER = "weather"
+        const val KEY_AUTOPLAY = "autoplay"
         const val PLAY = "▶"
         const val PAUSE = "⏸"
         const val PLAY_STEP_MS = 600L

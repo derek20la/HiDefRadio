@@ -48,6 +48,10 @@ No root, no computer, no internet connection needed (a dongle on another compute
 - You choose what happens when another app plays sound: mute and resume, stop, or play along.
 - Light, dark gray and true black themes. The screen can turn with the phone, or stay in portrait or landscape (handy in a car mount).
 
+### Traffic and weather maps
+- On stations that carry them (the Total Traffic Network or HERE data services), a **traffic map** and **weather radar** received over the air, no internet needed. They appear under the signal line while the signal details are closed; on a tablet, tap the "Signal details" heading to close them.
+- The radar plays through about 90 minutes of frames, and they're kept for a few hours across restarts. The base map is from OpenStreetMap.
+
 ### For radio people
 
 - **Signal details**: sync and service mode, MER per sideband, BER, bit rate, the analog quieting, carrier level and frequency offset, pilot level and stereo amount, the RDS code, the measured analog/HD alignment, what the blend did, tuner gain, peak level (with an overload warning) and the time to sync and to first sound.

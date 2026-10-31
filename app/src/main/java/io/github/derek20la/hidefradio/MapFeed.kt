@@ -9,6 +9,8 @@ import android.graphics.Rect
 import android.os.Build
 import android.util.Log
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.asinh
 import kotlin.math.max
@@ -28,7 +30,8 @@ import kotlin.math.tan
  * Traffic: nine tiles side by side, as soon as all nine are here.
  * Weather: the radar picture on top of a piece of the US map in assets, cut out with the corners
  * that came with it. The radar repeats itself between updates, so only a picture that changed
- * makes a new frame; about 90 minutes of frames are kept for the slider.
+ * makes a new frame; about 90 minutes of frames are kept for the slider, on disk too, by area,
+ * so they're still there after a restart or on another station with the same radar.
  *
  * RadioService calls poll() while the radio runs, so the maps are ready when someone looks;
  * the work is done on a thread of its own. The screen (MapPanel) reads traffic and frames, and
@@ -44,6 +47,8 @@ object MapFeed {
     private const val MIN_FRAME = 981               // the radar pictures: at least this many pixels
     private const val MAX_FRAME = 2000              // and at most this, or as sharp as the map is
     private const val JPEG_QUALITY = 90
+    private const val MAX_FRAME_AGE_MS = 3 * 3600_000L  // older radar is history, not weather
+    private const val FRAMES_DIR = "radar"
 
     private val worker = Executors.newSingleThreadExecutor()
 
@@ -66,13 +71,15 @@ object MapFeed {
     private var baseMap: Bitmap? = null
     private var waitingOverlay: ByteArray? = null   // a radar picture that came before its corners
     private var lastOverlay = 0
+    private var area = ""                           // the folder of the frames in use
 
     /** Takes what the decoder has collected (RadioService, every couple of seconds). */
     fun poll(context: Context) {
         val now = RadioEngine.getMapEpochNative()
         if (now != epoch) {
             epoch = now
-            worker.execute { forgetStation() }
+            val app = context.applicationContext
+            worker.execute { forgetStation(app) }
         }
         while (true) {
             val item = RadioEngine.takeMapItemNative() ?: break
@@ -88,16 +95,45 @@ object MapFeed {
         }
     }
 
-    private fun forgetStation() {
+    private fun forgetStation(context: Context) {
         tiles.fill(null)
         trafficHere = null
         traffic = null
-        frames = emptyList()
         corners = null
         baseMap = null
         waitingOverlay = null
-        lastOverlay = 0
+        // The last radar stays until this station says it covers somewhere else.
+        val newest = File(context.cacheDir, FRAMES_DIR).listFiles()?.maxByOrNull { it.lastModified() }
+        if (newest != null) restoreFrames(newest)
+        else {
+            frames = emptyList()
+            lastOverlay = 0
+            area = ""
+        }
         generation++
+    }
+
+    /** The frames in a folder: <time>_<hash of the radar picture>.jpg */
+    private fun restoreFrames(folder: File) {
+        val oldest = System.currentTimeMillis() - MAX_FRAME_AGE_MS
+        val kept = ArrayList<Pair<Long, File>>()
+        for (f in folder.listFiles().orEmpty()) {
+            val time = f.name.substringBefore('_').toLongOrNull()
+            if (time == null || time < oldest) f.delete() else kept.add(time to f)
+        }
+        kept.sortBy { it.first }
+        frames = kept.takeLast(MAX_FRAMES).map { WeatherFrame(it.second.readBytes(), it.first) }
+        lastOverlay = kept.lastOrNull()?.second?.name?.substringAfter('_')?.removeSuffix(".jpg")?.toIntOrNull() ?: 0
+        area = folder.name
+    }
+
+    private fun saveFrame(context: Context, frame: WeatherFrame, hash: Int) {
+        if (area.isEmpty()) return
+        val folder = File(File(context.cacheDir, FRAMES_DIR), area)
+        folder.mkdirs()
+        File(folder, "${frame.timeMs}_$hash.jpg").writeBytes(frame.jpeg)
+        val files = folder.listFiles().orEmpty().sortedBy { it.name.substringBefore('_').toLongOrNull() ?: 0L }
+        files.dropLast(MAX_FRAMES).forEach { it.delete() }
     }
 
     private fun handle(context: Context, item: ByteArray) {
@@ -180,12 +216,15 @@ object MapFeed {
         if (corners?.contentEquals(box) == true && baseMap != null) return
         corners = box
         baseMap = cutBaseMap(context, box)
-        // the frames so far belong to another area
-        if (frames.isNotEmpty()) {
-            frames = emptyList()
-            generation++
-        }
+        val name = String.format(Locale.US, "%.3f_%.3f_%.3f_%.3f", box[0], box[1], box[2], box[3])
+        if (name == area) return
+        // the frames so far belong to another area: this one's, if any were kept
+        area = name
+        frames = emptyList()
         lastOverlay = 0
+        val folder = File(File(context.cacheDir, FRAMES_DIR), name)
+        if (folder.isDirectory) restoreFrames(folder)
+        generation++
     }
 
     /** The piece of the US map under the radar. Null if the corners are outside the map. */
@@ -237,7 +276,9 @@ object MapFeed {
         val picture = if (base != null) compose(base, overlay) else overlay
         val out = ByteArrayOutputStream(256 * 1024)
         picture.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-        frames = (frames + WeatherFrame(out.toByteArray(), System.currentTimeMillis())).takeLast(MAX_FRAMES)
+        val frame = WeatherFrame(out.toByteArray(), System.currentTimeMillis())
+        frames = (frames + frame).takeLast(MAX_FRAMES)
+        saveFrame(context, frame, hash)
         generation++
     }
 
