@@ -77,3 +77,7 @@ THANKS
 nrsc5-dui by Mark J. Fine (GPL-3.0) and the SDRSharp NRSC5 plugin (GPL-3.0) — ideas borrowed: logo cache, telling logos from album art, signal details, sync-loss grace period, smooth program switching.
 
 redsea by Oona Räisänen (MIT) — used to cross-check the RDS call-letter and character tables. No code taken.
+
+Weather base map (usa_basemap.jpg)
+  Map data and cartography (c) OpenStreetMap contributors, https://www.openstreetmap.org/copyright
+  Prepared by the nrsc5-gui and NRSC5 Studio projects.

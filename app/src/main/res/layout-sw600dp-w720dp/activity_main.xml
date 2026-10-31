@@ -581,11 +581,16 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- Tap to close the details; the traffic and weather maps take their place. -->
             <TextView
+                android:id="@+id/details_heading"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:layout_marginBottom="10dp"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
                 android:text="@string/details_heading"
                 android:textAppearance="?attr/textAppearanceHeadline6" />
 
@@ -596,6 +601,13 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:shrinkColumns="1" />
+
+            <io.github.derek20la.hidefradio.MapPanel
+                android:id="@+id/map_panel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone" />
 
             <Button
                 android:id="@+id/debug_toggle"
