@@ -177,6 +177,7 @@ class MainActivity : AppCompatActivity() {
     // 9h: the status line's normal text colors (it turns amber for "plug in").
     private var hintColors: ColorStateList? = null
     // Are the signal details / debug text open? Remembered between app starts.
+    private var shownArt: ByteArray? = null  // the album art on screen, for blocking it
     private var detailsOpen = false
     // Build 15: a tablet at least 720 dp wide (smallest side >= 600 dp, width >= 720 dp right now) uses
     // layout-sw600dp-w720dp/activity_main.xml, where the details have a pane of their own and are
@@ -778,11 +779,12 @@ class MainActivity : AppCompatActivity() {
         // another station's (LogoCache.fits): 91X's analog played under KDSC's saved logo.
         val savedFits = service == null ||
             LogoCache.fits(this, freqHz, shownSignal.station, shownSignal.analog, shownSignal.rdsPi)
-        val key = "${service?.pictureGen()}/$program/$freqHz/$otherAnalog/$savedFits/${LogoCache.version}"
+        val key = "${service?.pictureGen()}/$program/$freqHz/$otherAnalog/$savedFits/${LogoCache.version}/${ArtBlock.version}"
         if (key == shownPicturesKey) return
         shownPicturesKey = key
 
-        val art = if (otherAnalog) null else service?.art(program)?.let { decode(it) }
+        shownArt = if (otherAnalog) null else service?.art(program)
+        val art = shownArt?.let { decode(it) }
         val logo = if (otherAnalog) null else
             (service?.logo(program) ?: (if (savedFits) LogoCache.load(this, freqHz, program) else null))?.let { decode(it) }
 
@@ -1511,6 +1513,23 @@ class MainActivity : AppCompatActivity() {
             detailsOpen = !detailsOpen
             prefs.edit().putBoolean(KEY_DETAILS_OPEN, detailsOpen).apply()
             refreshScreen()
+        }
+        // Hold a finger on the picture to block it (stations send ads as album art).
+        binding.nowImage.setOnLongClickListener {
+            val picture = shownArt
+            if (picture == null) false
+            else {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle(R.string.art_block_title)
+                    .setMessage(R.string.art_block_message)
+                    .setPositiveButton(R.string.art_block_yes) { _, _ ->
+                        ArtBlock.block(this, picture)
+                        refreshScreen()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+                true
+            }
         }
         binding.debugToggle.setOnClickListener {
             debugOpen = !debugOpen
