@@ -740,7 +740,8 @@ class RadioService : Service() {
     fun logo(program: Int): ByteArray? = if (silentNow) null else RadioEngine.getLogoNative(program)
 
     /** The album art for [program]'s current song, or null. */
-    fun art(program: Int): ByteArray? = if (silentNow) null else RadioEngine.getArtNative(program)
+    fun art(program: Int): ByteArray? = if (silentNow) null else
+        RadioEngine.getArtNative(program)?.takeUnless { ArtBlock.isBlocked(this, it) }
 
     // The pictureGen() we last saved logos for (-1 = never).
     private var savedPictureGen = -1

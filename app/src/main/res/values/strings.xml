@@ -28,6 +28,11 @@
     <string name="debug_copied_label">HiDef Radio debug info</string>
     <!-- Build 12: the speed test button in the debug info -->
     <string name="speed_test">Run speed test</string>
+    <string name="art_block_title">Block this picture?</string>
+    <string name="art_block_message">It won\'t be shown again, even when the station sends it again. Settings can clear the list.</string>
+    <string name="art_block_yes">Block</string>
+    <string name="art_block_clear">Clear blocked pictures</string>
+    <string name="art_block_count">Blocked: %1$d. Hold a finger on a picture to block it.</string>
     <string name="details_heading">Signal details</string>          <!-- build 15: title of the tablet details pane -->
     <string name="speed_test_no_radio">Start the radio first</string>
     <string name="signal_off">Radio off</string>

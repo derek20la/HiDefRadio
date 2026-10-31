@@ -174,6 +174,15 @@ class SettingsActivity : AppCompatActivity() {
             // --- 9f: About ---
 
             // "HiDef Radio / Version 1.0-beta1 (build 1) / Installed Oct 2, 8:15 PM"
+            findPreference<Preference>("art_block_clear")?.let { pref ->
+                val context = requireContext()
+                pref.summary = getString(R.string.art_block_count, ArtBlock.count(context))
+                pref.setOnPreferenceClickListener {
+                    ArtBlock.clear(context)
+                    pref.summary = getString(R.string.art_block_count, 0)
+                    true
+                }
+            }
             findPreference<Preference>(KEY_VERSION)?.summary = versionSummary()
 
             // Build 7: "Getting started" → the welcome card of the first start, again.

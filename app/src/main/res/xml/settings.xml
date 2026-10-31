@@ -221,6 +221,10 @@
         <Preference
             app:key="clear_data"
             app:title="@string/setting_clear" />
+
+        <Preference
+            app:key="art_block_clear"
+            app:title="@string/art_block_clear" />
     </PreferenceCategory>
 
     <!-- 9f: About. The GPL asks apps to show their license and "no warranty"
