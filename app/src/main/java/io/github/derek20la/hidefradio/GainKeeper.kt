@@ -27,6 +27,24 @@ package io.github.derek20la.hidefradio
  *  After every change, the next [SETTLE_TICKS] peak reading and the next MER
  *  reading are ignored: they're half old gain, half new.
  *
+ * Build 39 - FM stations with HD. The tune's auto-gain now looks at the HD
+ * sidebands themselves and picks the gain where they stand out of the noise
+ * best (the "quality sweep", doAutoGainFm in native-lib.cpp; [tick]'s
+ * sweepChose says it did). That gain may be well below what the peak allows:
+ * on 103.5 KOST in Long Beach the HD is best at a peak of -9 dBFS and gone
+ * at -3. Rule 2 knows nothing of that - "quiet, so up" is exactly what put
+ * KOST back on the gain that kills its HD. So after a sweep:
+ *  - Rule 2 doesn't go ABOVE the sweep's gain. A MER try (rule 3) still may,
+ *    and if it is kept, that gain is the new limit ("the highest tested gain").
+ *    If HD hasn't been in sync for [SWEEP_LIFT_MS], the limit is dropped: the
+ *    signal has changed (or gone), and the peak is all there is to go by.
+ *  - A try UP that loses the MER altogether (the HD dropped out up there)
+ *    counts as "worse": that step becomes a ceiling, like a try with a worse MER.
+ *  - [gainTrusted] says whether the gain now set is a TESTED one: chosen by
+ *    the sweep, or by a MER try that was kept - and not moved by rule 1 or 2
+ *    since. RadioService remembers only such a gain (GainMemory).
+ * Without a sweep (AM, FM stations without HD) nothing here differs from build 38.
+ *
  * Which MER? The BETTER of the two sidebands. The worse one is often limited
  * by a station next door (e.g. KKGO's upper sideband by 105.3 KIOZ), which no
  * gain setting can fix, and it jumps around - it would only add noise.
@@ -80,6 +98,14 @@ class GainKeeper(steps: IntArray) {
     private var ceilingUntilMs = 0L         // ... until then
     private var checkPending = false        // rule 2 went up; a MER try down should check it first
 
+    // Build 39 (see the top)
+    /** The gain now set was chosen by the quality sweep or by a kept MER try (and not moved by rule 1 or 2 since). */
+    var gainTrusted = false
+        private set
+    private var first = true                // the first reading after restart() is still to come
+    private var sweepTop = -1               // after a quality sweep: the highest tested step; rule 2 stays at or below it (-1 = no sweep)
+    private var lastLockedMs = 0L           // when HD was last in sync (or the restart)
+
     /** Start over (a new station, gain set by hand, radio off...). */
     fun restart(nowMs: Long) {
         downs = 0
@@ -104,6 +130,10 @@ class GainKeeper(steps: IntArray) {
         ceilingIndex = -1
         ceilingUntilMs = 0L
         checkPending = false
+        gainTrusted = false
+        first = true
+        sweepTop = -1
+        lastLockedMs = nowMs
     }
 
     /** How long the gain has stayed the same (ms). 0 while a try is running. */
@@ -114,11 +144,25 @@ class GainKeeper(steps: IntArray) {
      * [gainTenths] = the gain now set, [peakDbfs] = the loudest peak since the
      * last reading (-99 = no samples), [locked] = HD sync right now,
      * [merCount] / [merLower] / [merUpper] = native's MER counter and the latest MER.
+     * [sweepChose] (build 39) = this tune's gain came from the FM quality sweep
+     * (Signal.gainSwept); looked at on the first reading after [restart] only.
      * Returns the gain to switch to (tenths of a dB), or [NO_CHANGE].
      */
     fun tick(nowMs: Long, gainTenths: Int, peakDbfs: Float,
-             locked: Boolean, merCount: Int, merLower: Float, merUpper: Float): Int {
+             locked: Boolean, merCount: Int, merLower: Float, merUpper: Float,
+             sweepChose: Boolean = false): Int {
         if (steps.isEmpty()) return NO_CHANGE
+
+        // Build 39: a new station - did the quality sweep choose its gain?
+        if (first) {
+            first = false
+            lastLockedMs = nowMs
+            if (sweepChose) {
+                sweepTop = nearestIndex(gainTenths)
+                gainTrusted = true
+            }
+        }
+        if (locked) lastLockedMs = nowMs
 
         // A NEW MER reading (one every ~1.5 s)? Collect it for rule 3.
         if (merCount != lastMerCount) {
@@ -142,6 +186,7 @@ class GainKeeper(steps: IntArray) {
             if (i == 0) return NO_CHANGE            // already at the lowest gain
             blockedIndex = i
             blockedUntilMs = nowMs + UP_BLOCK_MS
+            gainTrusted = false                     // build 39: moved by the peak, not tested
             return change(nowMs, i, i - 1, stays = true)
         }
 
@@ -154,8 +199,9 @@ class GainKeeper(steps: IntArray) {
         // Rule 2: quiet for a while -> up, if the next step still stays under the target
         // (and isn't blocked by an overload or a worse MER a moment ago). While synced,
         // one step at a time: the MER try that checks the last step comes first.
+        // Build 39: and not above the gain the quality sweep chose (see the top).
         if (recent.size == QUIET_TICKS && i < steps.lastIndex && mayGoUpTo(i + 1, nowMs) &&
-                !(locked && checkPending)) {
+                !(locked && checkPending) && sweepAllows(i + 1, nowMs)) {
             val loudest = recent.maxOrNull() ?: return NO_CHANGE
             if (loudest + rise(i) < TARGET_DBFS) {
                 // Went up by the peak alone -> check soon with a MER try DOWN
@@ -163,6 +209,7 @@ class GainKeeper(steps: IntArray) {
                 preferUp = false
                 nextTryMs = minOf(nextTryMs, nowMs + TRY_AGAIN_MS)
                 checkPending = true
+                gainTrusted = false                 // build 39: moved by the peak, not tested
                 return change(nowMs, i, i + 1, stays = true)
             }
         }
@@ -205,6 +252,8 @@ class GainKeeper(steps: IntArray) {
                 // Better: stay here. Soon try one more step the same way.
                 kept++
                 record(nowMs, from, to)
+                gainTrusted = true                  // build 39: a tested gain ...
+                if (sweepTop >= 0) sweepTop = to    // ... and rule 2's new limit
                 if (!up) setCeiling(from, nowMs)    // the higher gain was worse
                 preferUp = up
                 failWaitMs = TRY_FAIL_WAIT_MS
@@ -221,6 +270,9 @@ class GainKeeper(steps: IntArray) {
             return change(nowMs, i, from, stays = false)
         }
         if (nowMs - tryStartMs > TRY_TIMEOUT_MS) {  // no MER readings (sync lost?) -> back
+            // Build 39: after a quality sweep, "the HD dropped out up there" is as good a
+            // "worse" as a lower MER: stay below that step for a while.
+            if (up && sweepTop >= 0) setCeiling(to, nowMs)
             nextTryMs = nowMs + failWaitMs
             endTry()
             return change(nowMs, i, from, stays = false)
@@ -234,6 +286,13 @@ class GainKeeper(steps: IntArray) {
         val capped = ceilingIndex in 0..index && nowMs < ceilingUntilMs
         return !blocked && !capped
     }
+
+    /**
+     * Build 39, rule 2 only: after a quality sweep, not above the highest tested step -
+     * unless HD has been out of sync for [SWEEP_LIFT_MS] (then the peak is all we have).
+     */
+    private fun sweepAllows(index: Int, nowMs: Long): Boolean =
+        sweepTop < 0 || index <= sweepTop || nowMs - lastLockedMs >= SWEEP_LIFT_MS
 
     private fun setCeiling(index: Int, nowMs: Long) {
         ceilingIndex = index
@@ -298,6 +357,9 @@ class GainKeeper(steps: IntArray) {
         const val TRY_TIMEOUT_MS = 10_000L        // no MER at the tried gain -> go back
         const val TRY_PEAK_MAX_DBFS = -2.5f       // try up only if the peak would stay below this
         const val CEILING_MS = 600_000L           // a worse gain stays off-limits for 10 minutes
+
+        // Build 39 (after a quality sweep)
+        const val SWEEP_LIFT_MS = 60_000L         // HD out of sync this long -> rule 2 may go above the sweep's gain again
         private const val NO_DATA_DBFS = -90f
     }
 }

@@ -20,6 +20,12 @@ data class Signal(
     // Build 32: rtl_tcp on AM - the auto-gain found that the gain changes nothing (the server's
     // dongle is probably a V3 in direct sampling, which the server can't tell us). gainDb is -1 then.
     val gainNoEffect: Boolean,
+    // Build 39: FM - this tune's auto gain was chosen by the quality sweep (it found HD sidebands
+    // and took the gain where they stand out of the noise best; doAutoGainFm in native-lib.cpp).
+    val gainSwept: Boolean,
+    // Build 39a: ... and how far the HD sideband stood out of the noise at that gain, in tenths
+    // of a dB (-1 = not known, or the watchdog has moved the gain since). Kept by GainMemory.
+    val gainQuality: Int,
     val offsetHz: Int,        // tuning error nrsc5 measured
     val merLower: Float,      // modulation error ratio (dB) of each sideband, higher = better
     val merUpper: Float,
@@ -261,6 +267,8 @@ data class Signal(
                 am = bool("am"),                                       // 9c
                 direct = bool("direct"),                               // 14c
                 gainNoEffect = bool("gainNoEffect"),                   // build 32
+                gainSwept = bool("gainSwept"),                         // build 39
+                gainQuality = float("gainQuality", -1f).toInt(),       // build 39a
                 offsetHz = float("offsetHz", 0f).toInt(),
                 merLower = float("merLower", 0f),
                 merUpper = float("merUpper", 0f),

@@ -80,6 +80,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * Milestone 10c: a gain watchdog (GainKeeper) keeps adjusting the AUTO gain
  * while you listen (by the peak level, and by trying neighbouring steps' MER), and the gain that worked is remembered per frequency
  * (GainMemory), so the next tune can skip the search.
+ * Build 39: on FM the tune's auto-gain picks the gain by the HD sidebands themselves (the
+ * "quality sweep", native-lib.cpp); the watchdog doesn't climb above that gain on the peak
+ * alone, and only a tested gain is remembered (GainKeeper.gainTrusted).
  */
 class RadioService : Service() {
 
@@ -423,7 +426,9 @@ class RadioService : Service() {
         val owner = if (FmBand.isAm(hz)) null else LogoCache.owner(this, hz)
         RadioEngine.setHdOwnerNative(owner?.name ?: "", owner?.pi?.toIntOrNull(16) ?: -1)
         savedOwnerKey = ""
-        streamInfo = RadioEngine.startStreamNative(hz, gain, hint)
+        // Build 39a: ... with what is known about it (FM: was it tested, and how good was the HD then)
+        val hintQuality = if (hint >= 0) GainMemory.quality(this, hz, hint) else -1
+        streamInfo = RadioEngine.startStreamNative(hz, gain, hint, hintQuality)
         Log.i(TAG, streamInfo)
         lastBytes = 0L
         lastTimeMs = SystemClock.elapsedRealtime()
@@ -609,6 +614,8 @@ class RadioService : Service() {
 
     /**
      * Checks 5 times a second: is the wanted program on the air yet? Yes -> switch.
+     * (Build 39b: HD1 at once - it needs no HD; a sub-channel at once too while no program is
+     * known yet, and then we wait for it in silence. ProgramWish.kt has the rules.)
      * Gives up (and stays on HD1) when the station has been playing for
      * WANTED_GRACE_MS without it - it probably isn't broadcasting that program
      * any more - or after WANTED_TIMEOUT_MS in any case (no signal at all).
@@ -621,8 +628,13 @@ class RadioService : Service() {
                 handler.postDelayed(this, 200)
                 return
             }
-            if (programs().any { it.number == p }) {
-                RadioEngine.setProgramNative(p)         // fades like a button tap
+            // Build 39b: HD1 never waits, and a sub-channel is selected at once while no HD has
+            // been decoded yet (silence while searching, like after a retune) - see ProgramWish.kt.
+            // (Until build 39 every program waited to be "on the air" here; without HD reception
+            // HD1 never was, so an HD4 favorite followed by the HD1 favorite stayed on HD4, silent.)
+            val wish = ProgramWish.decide(p, RadioEngine.getProgramNative(), programs().map { it.number })
+            if (wish.select) RadioEngine.setProgramNative(p)   // fades like a button tap
+            if (wish.done) {
                 wantedProgram = -1
                 Log.i(TAG, "Wanted program HD${p + 1} is on the air - switched")
                 updateNotification()
@@ -671,7 +683,7 @@ class RadioService : Service() {
             return
         }
         val gain = Math.round(s.gainDb * 10)
-        val newGain = keeper.tick(now, gain, peak, s.locked, s.merCount, s.merLower, s.merUpper)
+        val newGain = keeper.tick(now, gain, peak, s.locked, s.merCount, s.merLower, s.merUpper, s.gainSwept)
         if (newGain != GainKeeper.NO_CHANGE) {
             // (M10c step 2: "trying" = a MER try starts; the keeper decides after ~5 s.)
             Log.i(TAG, "Gain watchdog: peak %.1f dBFS, MER %.1f / %.1f -> %.1f dB%s".format(Locale.US,
@@ -686,8 +698,14 @@ class RadioService : Service() {
             return
         }
         // Happy for a while on a station that decodes -> remember this gain for next time.
-        if (s.locked && keeper.stableForMs(now) >= REMEMBER_GAIN_AFTER_MS) {
-            GainMemory.set(this, freqHz, gain)          // only writes if it's different
+        // Build 39, FM: only a gain that was TESTED - chosen by the tune's quality sweep or by a
+        // MER try that was kept (keeper.gainTrusted) - not one the peak rules moved to. (A gain
+        // the watchdog climbed to "because it was quiet" is how 103.5 KOST got a remembered gain
+        // that killed its HD, tune after tune.) AM: as before.
+        if (s.locked && (s.am || keeper.gainTrusted) && keeper.stableForMs(now) >= REMEMBER_GAIN_AFTER_MS) {
+            // Build 39a, FM: with the sweep's HD figure for this gain, or 0 = "tested" if a MER try
+            // moved it since - a tested gain needs no search next time (doAutoGainFm in native-lib.cpp).
+            GainMemory.set(this, freqHz, gain, if (s.am) -1 else maxOf(s.gainQuality, 0))   // only writes if it's different
         }
     }
 

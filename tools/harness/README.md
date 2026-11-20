@@ -475,3 +475,62 @@ Which side is which, checked directly: KYSR with +129..+199 kHz deleted from the
 "lower"; the fork says "lower 13.1, upper -13.9". With -199..-129 kHz deleted the fork's
 "lower" collapses (-16.1 / 9.8). The app's screen showed the dead sideband as "upper" in both
 builds.
+
+## The FM auto-gain (build 39): GAINFILES, gaintest, gainkeepertest
+
+Until build 38 the harness could not test the auto-gain search at all: a recording is made
+at ONE gain, so whatever gain the app set, it got the same samples back. Build 39's search
+judges a gain by the signal itself (how far the HD sidebands stand out of the noise floor,
+`gainscore.hpp`), so the fake dongle learned to answer a gain change:
+
+    GAINFILES="37:kost_3.7.cu8,87:kost_8.7.cu8,144:kost_14.4.cu8,207:kost_20.7.cu8,280:kost_28.0.cu8" \
+        GAIN=auto IQSTEP=1 build/apptest 103500000 0 10
+
+- `GAINFILES` one recording per tuner gain (tenths of a dB `:` file), all of the same station,
+  made one after the other with the manual gain setting (the app's own IQ recorder does it:
+  ~15 s each). Whenever the app sets a gain, the fake dongle goes on with the recording made at
+  the NEAREST of those gains, at the same time offset, and says so (`STUB: gain 16.6 dB -> the
+  14.4 dB recording`; `GAINFILES_QUIET=1` = don't). `GAIN=auto` then runs the app's real search
+  on real signals - a station whose HD dies at 20.7 dB dies here too - and a `t:again:N` event
+  changes the signal as the watchdog would.
+- `GAINSTEPS=files` the fake tuner has ONLY those gains as its steps. (Else it has the V4's 29
+  steps and several of them share one recording, which the search sees as "all the same".)
+- `GAINSTART=2.5` starts 2.5 s into the recordings: the same search on another stretch of the
+  same signals (run it for 0, 0.5, 1 ... to see how often the search picks what).
+- `GAINHINT=207` a remembered gain, as before: the way to replay "the app remembered a gain that
+  no longer works".
+- `GAINHINTQ=126` (build 39a) what GainMemory knows about that gain: tested, and its HD sideband
+  stood 12.6 dB over the floor then (`0` = tested, no figure). Such a gain gets one look and no
+  search if it still fits. Not given = remembered by build 38 or older: the search starts from it.
+
+The log shows every measurement (`auto-gain: try 14.4 dB -> peak -11.5 dBFS, HD sidebands 10.7 /
+11.3 dB over the floor`) and the choice. `SIGDUMP=8 PRINT=4` adds the decoder's verdict on it
+(`merLower`, `merUpper`, `berAvg`, `crcErrors`).
+
+`build/gaintest file.cu8 ...` runs `gainscore.hpp` alone over whole recordings, burst by burst:
+the mean and the scatter of "sideband over floor" per side, and in how many bursts a side
+"looks like HD". It is how the HD-or-not thresholds were checked (stations with HD: 99.9-100 %
+of the bursts at any usable gain; a neighbour's analog signal across the sideband: 0-3 %).
+
+`gainkeepertest.kt` tests the watchdog (`GainKeeper.kt` is plain Kotlin) on a made-up station
+whose HD is best at one gain and gone two steps up; `sh gainkeepertest_38.sh` (needs `kotlinc`,
+`java` and the git history) compiles build 38's GainKeeper in beside the current one and also
+checks that without a quality sweep (AM, stations without HD) every answer is the same as
+build 38's, over 300,000 random seconds.
+
+AM does not use any of this: `cmp` the `WAVOUT` of an AM run with `GAIN=auto` before and after -
+identical (KBRT 740 and KMZT 1260, with and without `GAINHINT`).
+
+## A favorite's program (build 39b): programwishtest.kt
+
+`ProgramWish.kt` is the rule `RadioService` follows when a favorite asks for a program (HD1 at
+once; a sub-channel at once while no HD has been decoded, else when it is on the air). Plain
+Kotlin, tested alone (needs `kotlinc`):
+
+    kotlinc ../../app/src/main/java/io/github/derek20la/hidefradio/ProgramWish.kt programwishtest.kt -include-runtime -d build/pw.jar && java -jar build/pw.jar
+
+What the ENGINE does with those switches is an `apptest` run with `t:prog:N` events on a
+recording without HD - silence on the sub-channel, the analog back on HD1 (`blend sub` /
+`blend analog` in the `PRINT=1` lines):
+
+    IQFILE=903.cu8 IQSTEP=1 PRINT=1 WAVOUT=out.wav build/apptest 90300000 2 9 0.01:prog:3 4:prog:0 7:prog:3

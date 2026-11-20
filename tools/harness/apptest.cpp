@@ -3,6 +3,8 @@
 //   WAVOUT=out.wav also saves the audio the app would play.
 //   CALLS="KGGI KJNY" = the calls the FCC list has on this frequency (for the RDS call rules).
 //   GAIN=auto = start with the app's auto-gain (default: a manual 30.0 dB; GAINHINT=297 = a remembered 29.7 dB);  DONGLE=V3 = see rtl_stub.c.
+//   GAINFILES="37:a.cu8,87:b.cu8,..." (build 39) = one recording per tuner gain instead of IQFILE, so the gain the app sets
+//     changes the signal it gets (rtl_stub.c);  GAINSTEPS=files = the fake tuner has only those gains.
 //   IQSTEP=1 = "virtual time": no waiting, the same numbers every run (see below);  PRINT=1 = a status line every second
 //   DRIFT=off = no clock correction (drift.hpp);  SIGDUMP=20 = print the app's whole status text once, at 20 s
 //   HDREST=off = the HD search never rests (hdsearch.hpp) - the engine as it was before build 9
@@ -100,7 +102,10 @@ int main(int argc, char **argv) {
     int gain = (gainEnv && strcmp(gainEnv, "auto") == 0) ? -1 : 300;
     // GAINHINT=297 (build 32): with GAIN=auto, the gain "remembered" for this frequency (GainMemory.kt), in tenths of a dB
     const int gainHint = getenv("GAINHINT") ? atoi(getenv("GAINHINT")) : -1;
-    fprintf(stderr, "%s\n", str(J(startStreamNative)(&env, nullptr, hz, gain, gainHint)).c_str());
+    // GAINHINTQ=126 (build 39a, FM): what GainMemory knows about that gain - 126 = tested, its HD sideband stood 12.6 dB
+    // over the floor; 0 = tested, no figure; not given = remembered by build 38 or older (-1)
+    const int gainHintQ = getenv("GAINHINTQ") ? atoi(getenv("GAINHINTQ")) : -1;
+    fprintf(stderr, "%s\n", str(J(startStreamNative)(&env, nullptr, hz, gain, gainHint, gainHintQ)).c_str());
     // WAVOUT=file.wav: keep what the "AudioPlayer" hears (16-bit stereo, 44,100 Hz)
     static FILE *wav; static uint32_t wavBytes = 0;
     const char *wavName = getenv("WAVOUT");

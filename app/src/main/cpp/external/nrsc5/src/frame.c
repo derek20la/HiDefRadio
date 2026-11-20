@@ -513,6 +513,21 @@ static size_t process_fixed_data(frame_t *st, size_t length, logical_channel_t l
     return p - st->buffer;
 }
 
+// ---- HiDef Radio patch (2026-11-16): AM keeps its sync through a short fade ---------------------
+// nrsc5 goes back to "no sync" as soon as the first audio header of ONE P1 frame cannot be read
+// (below). On FM that frame is 1.49 s of signal and coming back costs about as long. On AM a P1
+// frame is one block, 0.19 s - so any fade that long threw the sync away, and getting it back
+// means acquiring again AND refilling AM's long interleaver: a 0.3 s fade cost 9.3 s of HD audio
+// (measured: KMZT 1260 with a fade cut in; a real dropout on KMZT cost 8.1 s).
+// But the timing is not lost in a fraction of a second - the sample clock and the carrier have
+// not gone anywhere. So on AM the sync is now given up only after HIDEF_AM_BAD_P1 frames in a
+// row without a readable header (16 = 3 s). Same recordings: 0.3 s fade -> 0.4 s of silence,
+// 1 s -> 1.5 s, 2 s -> 3.6 s; the real dropout 4.1 s in pieces instead of 8.1 s. A longer loss
+// ends as before, 3 s later. (Waiting much longer is not better: through seconds of noise the
+// tracking wanders, and the new search only starts later.) FM is untouched: there the same idea
+// gained and lost about equally (claude/Experiment_2026-11-16_nrsc5_sync_hold.md in the app's notes).
+#define HIDEF_AM_BAD_P1 16
+
 void frame_process(frame_t *st, size_t length, logical_channel_t lc)
 {
     unsigned int offset = 0;
@@ -535,10 +550,19 @@ void frame_process(frame_t *st, size_t length, logical_channel_t lc)
         if (!fix_header(st, st->buffer + offset))
         {
             // go back to coarse sync if we fail to decode any audio packets in a P1 frame
-            if ((length == MAX_PDU_LEN || length == P1_PDU_LEN_AM) && offset == 0)
+            // HiDef Radio patch (2026-11-16): on AM, only after HIDEF_AM_BAD_P1 such frames in a
+            // row (see the note above frame_process). FM is as it was: the first one.
+            if (length == P1_PDU_LEN_AM && offset == 0)
+            {
+                if (++st->bad_p1_am >= HIDEF_AM_BAD_P1)
+                    input_set_sync_state(st->input, SYNC_STATE_NONE);
+            }
+            else if (length == MAX_PDU_LEN && offset == 0)
                 input_set_sync_state(st->input, SYNC_STATE_NONE);
             return;
         }
+        if (length == P1_PDU_LEN_AM && offset == 0)
+            st->bad_p1_am = 0;                                  // a readable header: the count starts again
 
         parse_header(st->buffer + offset, &hdr);
         offset += 14;
@@ -727,6 +751,7 @@ void frame_reset(frame_t *st)
         }
 
     st->pci = 0;
+    st->bad_p1_am = 0;
     for (int prog = 0; prog < MAX_PROGRAMS; prog++)
     {
         st->psd_idx[prog] = -1;

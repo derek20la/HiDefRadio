@@ -48,6 +48,7 @@ typedef struct
     int psd_idx[MAX_PROGRAMS];
     ccc_data_t ccc_data[NUM_LOGICAL_CHANNELS];
     void *rs_dec;
+    unsigned int bad_p1_am;   // HiDef Radio patch (2026-11-16): AM P1 frames in a row without a readable header (frame.c)
 } frame_t;
 
 void frame_push(frame_t *st, uint8_t *bits, size_t length, logical_channel_t lc);

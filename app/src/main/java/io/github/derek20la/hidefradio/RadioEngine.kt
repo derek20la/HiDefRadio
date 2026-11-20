@@ -38,8 +38,11 @@ object RadioEngine {
      * gainTenthsDb: 0 = 0.0 dB, 496 = 49.6 dB; negative = automatic (nrsc5-style).
      * hintTenthsDb (M10c): automatic only - the gain that worked on this
      * frequency last time (GainMemory); tried first, used if it still fits. -1 = none.
+     * (Build 39, FM: it is where the quality sweep starts - doAutoGainFm in native-lib.cpp.)
+     * hintQualityTenths (build 39a, FM): GainMemory.quality() for that gain - if it was tested,
+     * one look decides whether it is still good (no search). -1 = not known.
      */
-    external fun startStreamNative(freqHz: Int, gainTenthsDb: Int, hintTenthsDb: Int): String
+    external fun startStreamNative(freqHz: Int, gainTenthsDb: Int, hintTenthsDb: Int, hintQualityTenths: Int): String
 
     /** What nrsc5 has decoded so far: sync, MER/BER, station name, song... */
     external fun getStatusNative(): String
