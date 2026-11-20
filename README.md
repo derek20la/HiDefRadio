@@ -6,7 +6,7 @@ An Android radio for the **RTL-SDR dongle**. Plug the dongle into the phone with
 
 No root, no computer, no internet connection needed (a dongle on another computer over your Wi-Fi works too, since 1.2). Everything you hear and see comes from the antenna: audio, station names, song titles, station logos and album art.
 
-> **Status: 1.3.1.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
+> **Status: 1.4.** On Google Play, and an APK is on the [Releases](https://github.com/derek20la/HiDefRadio/releases) page (see [Get the app](#get-the-app)). Developed on a Moto G Stylus 2024 (Android 15) with an RTL-SDR Blog V4 in Los Angeles, and also run on a Pixel 8.
 
 <p>
   <img src="store/screenshots/1_hd_station_and_favorites.png" width="250" alt="An HD station with its logo, song title and the favorites strip">
@@ -53,7 +53,7 @@ No root, no computer, no internet connection needed (a dongle on another compute
 - **Signal details**: sync and service mode, MER per sideband, BER, bit rate, the analog quieting, carrier level and frequency offset, pilot level and stereo amount, the RDS code, the measured analog/HD alignment, what the blend did, tuner gain, peak level (with an overload warning) and the time to sync and to first sound.
 - A **speed test** and a **battery line** (tap "Show debug info" at the bottom of the main screen): the speed test records ten seconds of the station you hear and runs the FM demodulator and the HD decoder over it flat out, then tells you what each costs on your phone, in milliseconds of processor time per second of radio. The battery line shows the current the phone draws, also with the screen off.
 - A **5-bar signal meter** for analog FM that is based on quieting (how far the noise sits below full modulation), not on the carrier level. The carrier level of an RTL-SDR depends on the gain the strongest station in the band sets, so it says little about the station you are tuned to.
-- **Tuner gain**, automatic or manual, applied live. Automatic measures the signal when you tune, then a watchdog keeps adjusting while you listen. It steps down at once on overload and steps up when the signal is weak. The gain that worked is remembered for each station.
+- **Tuner gain**, automatic or manual, applied live. Automatic measures the signal when you tune, then a watchdog keeps adjusting while you listen. It steps down at once on overload and steps up when the signal is weak. On an FM station with HD (since 1.4) it picks the gain by the quality of the HD signal itself, measured in a few short looks, rather than by the signal level alone: some stations break up well before the dongle clips. The gain that worked is remembered for each station.
 - **FM stereo**: Auto (mono when noisy), Always mono (cuts the hiss of weak DX stations) or Always stereo.
 - A **built-in station list** from FCC data (the US, plus the Canadian and Mexican stations the FCC keeps on file). The details show the city of license, power and class, and stations whose RDS code can't be turned into call letters on its own (iHeart's "1xxx" codes) still get their call sign. Nothing is looked up online.
 - A notice when the HD signal on a frequency belongs to **another station** than the analog one you hear (it happens to DXers), with a tap to listen to the other one.
@@ -216,6 +216,8 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 - **1.2** (done): an rtl_tcp network source - the dongle on a PC or Raspberry Pi, the phone on Wi-Fi; our nrsc5 fork (a faster HD search, the right left / right in HD audio, MER named by its true sideband); a screen rotation setting.
 - **1.2.1** (done): the blend on stations whose analog is processed very differently from their HD (it aligns sooner, stays aligned, and comes back to the HD after a dropout); rtl_tcp on AM: the Gain row says so when the server's dongle ignores the gain (a V3 in direct sampling); rtl_tcp on Android 17: asks for the new local network permission ("Nearby devices"), without which the server can't be reached.
 - **1.3**: recording - audio (AAC) and IQ (.cu8, with a time limit), to a folder you choose; a dongle plugged into the phone wins over rtl_tcp.
+- **1.3.1** (done): scrolling RDS names put together into one line; an updated station list.
+- **1.4**: FM auto-gain by HD quality (a station whose HD broke up on Auto while a manual gain worked now gets that gain); AM HD keeps its sync through a short fade (a dropout of several seconds becomes one of a second or two); an HD1 favorite after an HD2 favorite plays the blend again on a weak signal; an IQ recording shows its real size when it ends, and recordings have shorter names.
 - **Later**: a DX log, seek and scan, a time-shift pause.
 
 ## Credits and licenses
