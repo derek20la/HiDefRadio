@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.text.format.Formatter
@@ -48,6 +49,10 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
 
     private var iqOn = false
     private var iqUri: Uri? = null
+    // Build 40: the file's own handle, kept open (unused) until the native side has finished
+    // writing and closed ITS copy; closing this one is what tells Android the file is done.
+    // See start() below.
+    private var iqPfd: ParcelFileDescriptor? = null
     private var iqName = ""
     private var iqStartMs = 0L
     private var iqLimitS = 0
@@ -77,23 +82,39 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
         val folder = Recordings.folder(context) ?: return context.getString(R.string.rec_no_folder)
         // A recording that ended while nobody looked (the service stopped meanwhile): free it.
         RadioEngine.takeIqRecordNative()
+        closeIqFile()
 
-        val time = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-        val freq = if (FmBand.isAm(hz)) "${FmBand.freqText(hz)}kHz" else "${FmBand.freqText(hz)}MHz"
         val wantAudio = what != Settings.REC_IQ
         val wantIq = what != Settings.REC_AUDIO
+        val now = Date()
         var problem: String? = null
 
         if (wantIq) {
             iqLimitS = Settings.recIqLimitS(context)
-            val name = "HiDefRadio_${time}_${freq}_${IQ_RATE}sps.cu8"
+            // No "_HD2" here: an IQ file holds every program of the station.
+            val name = baseName(hz, station, 0, now) + ".cu8"
             val uri = Recordings.create(context, folder, name, MIME_IQ)
             if (uri == null) {
                 problem = context.getString(R.string.rec_folder_gone)
             } else {
+                // Build 40: the IQ size in the Files app / Downloads stayed at what it was a moment
+                // after the start (e.g. "262 kB" for a full 89 MB file). Why: until build 39 the
+                // native side got the file with detachFd() - Kotlin let go of its handle at once,
+                // and the native code closed the raw number when it was done. Android's file
+                // provider only updates a file's size (in MediaStore, which those lists show)
+                // when ITS ParcelFileDescriptor is closed - and that one never was.
+                // Now the native side gets a copy (dup) of the handle and owns that copy as before,
+                // while we keep the original open and close it once the native writer has finished
+                // (closeIqFile(), after stopIqRecordNative() / the limit / an error). Both point at
+                // the same open file, so nothing about the writing changes.
+                val pfd = try {
+                    context.contentResolver.openFileDescriptor(uri, "w")
+                } catch (e: Exception) {
+                    Log.e(TAG, "IQ file", e)
+                    null
+                }
                 val r = try {
-                    val pfd = context.contentResolver.openFileDescriptor(uri, "w")
-                    if (pfd == null) -1 else RadioEngine.startIqRecordNative(pfd.detachFd(), iqLimitS)
+                    if (pfd == null) -1 else RadioEngine.startIqRecordNative(pfd.dup().detachFd(), iqLimitS)
                 } catch (e: Exception) {
                     Log.e(TAG, "IQ file", e)
                     -1
@@ -101,9 +122,11 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
                 if (r == 0) {
                     iqOn = true
                     iqUri = uri
+                    iqPfd = pfd
                     iqName = Recordings.nameOf(context, uri) ?: name
                     iqStartMs = SystemClock.elapsedRealtime()
                 } else {
+                    try { pfd?.close() } catch (e: Exception) { }
                     Recordings.delete(context, uri)               // an empty file helps nobody
                     problem = context.getString(when (r) {
                         1 -> R.string.rec_not_playing
@@ -115,9 +138,7 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
         }
 
         if (wantAudio && problem == null) {
-            val tag = clean(station).let { if (it.isEmpty()) "" else "_$it" } +
-                      (if (program > 0) "_HD${program + 1}" else "")
-            val name = "HiDefRadio_${time}_${freq}$tag.aac"
+            val name = baseName(hz, station, program, now) + ".aac"
             val uri = Recordings.create(context, folder, name, MIME_AUDIO)
             val stream = try {
                 uri?.let { context.contentResolver.openOutputStream(it, "w") }
@@ -161,12 +182,15 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
         player.tap = null
         val audio = writer?.let { Saved(audioName, audioUri) }
         val iq = if (wasIq) Saved(iqName, iqUri) else null
+        val pfd = iqPfd                 // closed on the stop thread, after the native writer is done
+        iqPfd = null
         aac = null
         iqOn = false
         Thread({
             writer?.finish()
             if (wasIq) RadioEngine.stopIqRecordNative()      // waits until the file is complete
             val iqResult = if (wasIq) RadioEngine.takeIqRecordNative() else null
+            if (wasIq) closeIqFile(pfd)                      // build 40: now Android sees the real size
             handler.post {
                 if (quiet) {
                     audio?.uri?.let { Recordings.delete(context, it) }
@@ -185,6 +209,7 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
             if (iqOn && RadioEngine.getIqRecordNative()[0] == STATE_ENDED) {
                 val result = RadioEngine.takeIqRecordNative()
                 iqOn = false
+                closeIqFile()                       // build 40: the native writer has closed its copy
                 if (result != null) {
                     report(null, Saved(iqName, iqUri, bytes = result[0], reason = result[1].toInt()),
                            audioGoesOn = aac != null)
@@ -234,6 +259,15 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
 
     private fun size(bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
 
+    /**
+     * Build 40: closes the IQ file's own handle (see start()). Only once the native writer has
+     * finished with its copy - otherwise Android would note a size that is still growing.
+     * [pfd] = the handle taken off [iqPfd] earlier (stop()); without it, [iqPfd] itself.
+     */
+    private fun closeIqFile(pfd: ParcelFileDescriptor? = iqPfd.also { iqPfd = null }) {
+        try { pfd?.close() } catch (e: Exception) { Log.e(TAG, "IQ file close", e) }
+    }
+
     companion object {
         private const val TAG = "HiDefRadio"
         private const val WATCH_MS = 1_000L
@@ -250,6 +284,27 @@ class Recorder(private val context: Context, private val player: AudioPlayer) {
         private const val REASON_LIMIT = 2
         private const val REASON_WRITE_FAILED = 3
         private const val REASON_TOO_SLOW = 4
+
+        /**
+         * Build 40: a recording's name without the ending - shorter, and what tells files apart
+         * comes first, so it still shows when a file list cuts long names off:
+         *
+         *     101.1FM_KRTH_HD2_11-18_0824.aac      (was HiDefRadio_2026-11-18_08-24-14_101.1MHz_KRTH_HD2.aac)
+         *     950AM_XEKA_11-18_0824.cu8            (was HiDefRadio_2026-11-18_08-24-14_950kHz_1488375sps.cu8)
+         *
+         * Frequency + band, the station (if known), the HD program (audio only, HD2 and up),
+         * then month-day and hour-minute. The year and the seconds are left out: the file's own
+         * date has the year, and a second recording in the same minute gets " (1)" from Android.
+         * The IQ sample rate (always 1,488,375 a second) is no longer in the name; Settings ->
+         * Recording says it (nrsc5: `nrsc5 -r file.cu8 0`).
+         */
+        fun baseName(hz: Int, station: String, program: Int, date: Date): String {
+            val freq = FmBand.freqText(hz) + if (FmBand.isAm(hz)) "AM" else "FM"
+            val call = clean(station).let { if (it.isEmpty()) "" else "_$it" }
+            val hd = if (program > 0) "_HD${program + 1}" else ""
+            val time = SimpleDateFormat("MM-dd_HHmm", Locale.US).format(date)
+            return "$freq$call${hd}_$time"
+        }
 
         /** "KRTH-FM" stays, "K-Love 99.5/HD" -> "K-Love_99.5_HD": safe in a file name everywhere. */
         fun clean(text: String): String =
