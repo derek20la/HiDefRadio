@@ -518,8 +518,72 @@ whose HD is best at one gain and gone two steps up; `sh gainkeepertest_38.sh` (n
 checks that without a quality sweep (AM, stations without HD) every answer is the same as
 build 38's, over 300,000 random seconds.
 
+### Build 41: "quiet but overloaded", and what a fix costs a station without HD
+
+Two kinds of test that real gain-step recordings can't do on their own, both made with
+`scaleiq.py` (numpy):
+
+- **An overload the peak can't see** (Long Beach, 11-20: strong stations outside our 1.5 MHz
+  overloaded the tuner, the peak read a calm -10 dBFS, and build 40 said "no HD sidebands"
+  while the HD was fine 20 dB lower). Take a real gain-step set and scale the high-gain files
+  DOWN until their peaks read -9 ... -12 dBFS: the overload damage stays in the samples, the
+  peak no longer shows it. Build 41 used the 11-23 KDAY set (40.2 -9, 33.8 -9.5, 28.0 / 22.9 /
+  20.7 -10, 19.7 -8, 14.4 -2 dB; 8.7 as it was):
+  `python3 scaleiq.py kday_402.cu8 kdayc_402.cu8 -9 12` and so on, then GAINFILES with the
+  `kdayc_` files. Build 40: 40.2 dB "no HD" in 16 of 16 tunes; build 41: 8.7 or 14.4 dB.
+- **A station without HD at every gain.** `python3 scaleiq.py --steps 903.cu8 a903 297 4`
+  makes one file per V4 step out of one recording, so the peak follows the gain; GAINFILES
+  with all 29 (`GAINSTEPS` not set). Build 41's longer look for HD lower down costs such a
+  station one burst more than build 40 in most tunes (three at most, on 879), with the same
+  gain chosen in every tune.
+
+`gainkeepertest.kt` tests 8-12 are build 41's watchdog rules (FM only: a real clip goes 6 dB
+down at once; a synced station whose MER is below zero gets an early try 3 dB down). With
+`gainkeepertest_38.sh`, tests 11 and 12 also prove what did NOT change: FM without HD = build 38,
+FM with HD but no clip and no MER below zero = build 40, answer for answer.
+
+**The watchdog on real signals** (build 41). `FMTRACE=1` makes `apptest` print, once a second,
+what RadioService hands the GainKeeper: the second's loudest peak, sync, the MER reading count
+and values, and the BER. Run each file of a gain-step set at its own gain with it (one trace
+file per gain, `<station>_<gain>.txt`), and `gainkeeperreplay.sh` replays build 41's GainKeeper
+next to build 40's on them: each second comes from the recording at the gain the watchdog has
+set right now. It is also the quickest way to read a file's MER and BER off ("ground truth").
+The 11-23 LA set, stuck at 40.2 dB with no sweep: clipping 4.8 % of the time with build 40,
+1.2 % with build 41; KOST in sync 95.8 % -> 98.8 %.
+
 AM does not use any of this: `cmp` the `WAVOUT` of an AM run with `GAIN=auto` before and after -
 identical (KBRT 740 and KMZT 1260, with and without `GAINHINT`).
+
+### Build 41, final: the LA set, KGGI at night, and the analog's quieting
+
+After the LA gain-step set and live Auto in Long Beach (11-23), build 41 got four more changes
+(GainKeeper.kt's top and doAutoGainFm() in native-lib.cpp say why, with the numbers):
+a remembered FM gain between -4 and -1.5 dBFS competes with the search instead of being thrown
+away; rule 1's 6 dB only for a converter full two seconds running; on FM, a peak that is loud but
+not clipping (-1.5 ... -0.5 dBFS) steps down only if it keeps happening; and rule 4, the "no
+sync -> lower" walk at the start of a tune. Plus one fix to fix 1: "HD" found at a peak under
+-16 dBFS no longer counts (it fooled the search on analog-only 90.3).
+
+- **`FMTRACE=1` now also prints the analog quieting** (`quiet`, Signal.fmQuietDb), the FM
+  carrier level and the damaged audio packets so far (`crc`). Make the traces in **Auto with the HD search never resting** (source `2`,
+  `HDREST=off`, see gainkeeperreplay.sh), so each second has sync, MER AND quieting. Rule 4
+  checks the quieting; it is also a good overload meter in its own right: on the 11-23 sets the
+  quieting of an overloaded station got 10-30 dB better as the gain came down, while on a station
+  that is not overloaded it hardly moved (0-3 dB per 6 dB of gain).
+- **`gainkeeperreplay.sh`** replays the current GainKeeper next to build 40's, and with
+  `OLD41A=<a GainKeeper.kt>` a third one (e.g. build 41 as first written). `TRAJ=1` prints every
+  gain change of the first replay (when, from, to, the peak and MER that second). The analog's average
+  quieting is a column now. Scenarios used: the search's pick; stuck at 40.2 without a sweep;
+  a sweep at 28.0; KGGI 7 PM at gains with no sync; the emulated blind overloads (`scaleiq.py`,
+  peaks -9 ... -12); KPCC indoors (sync marginal at every gain - its numbers swing with timing,
+  don't read much into them).
+- **`gainkeepertest.kt` 13-21**: 13 just under full scale (KGGI at 28.0); 14-19 rule 4 (finds
+  sync; gives up by 26 s and goes back; the quieting check stops it; Digital only; never after a
+  fade, never in Analog only, never without a sweep; a clip during the walk ends it); 20 = 300,000
+  random seconds where tunes often start out of sync: rule 4 only ever acts 8-26 s into a tune
+  that has not synced, and every other tune answers exactly as build 40; 21 the loud-but-not-
+  clipping patience (AM: one step at once, as before). Tests 11, 12 and 20 keep their random
+  peaks out of -1.5 ... -0.5 dBFS (test 21's band), so their answer-for-answer checks still hold.
 
 ## A favorite's program (build 39b): programwishtest.kt
 

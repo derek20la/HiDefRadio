@@ -1222,7 +1222,8 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
 //
 // Returns the chosen gain (tenths of dB), or -1 on error.
 static const float AUTO_TARGET_DBFS = -4.0f;    // search: highest gain whose peak stays below this
-static const float HINT_MAX_DBFS = -1.5f;       // remembered gain: louder than this = no (= the watchdog's limit)
+static const float HINT_MAX_DBFS = -1.5f;       // remembered gain: louder than this = no (= the watchdog's limit; AM only
+                                                //   since build 41 - FM uses HINT_MAX_FM_DBFS, see doAutoGainFm())
 static const float HINT_MIN_DBFS = -10.0f;      //   ... quieter than this = signals got weaker, search again
 // Build 32 (rtl_tcp on AM only, see g_gainNoEffect): "the gain has no effect" = the tried gains
 // span at least this much ...
@@ -1362,9 +1363,12 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint, boo
 //     shows HD at a sensible level. Otherwise the peak rule's answer (doAutoGain(), unchanged:
 //     the loudest gain the dongle's converter can take).
 //  2. IS THERE HD? The burst at the starting gain, through gainscore::measure().
-//     If neither sideband looks like HD there, one more look about 6 dB lower (an overloaded
-//     tuner can bury the sidebands completely). Still nothing: this is a station without HD -
-//     keep the peak rule's gain, exactly as before build 39.
+//     If neither sideband looks like HD there, look LOWER (an overloaded tuner can bury the
+//     sidebands completely). Build 41: first at the gains the peak search has measured
+//     already (free); then on down in 6 dB strides until HD shows, the peak gets quiet
+//     (SWEEP_MIN_PEAK_DBFS) or the lowest step is reached. (Builds 39-40 took ONE look, 6 dB
+//     down - see "Build 41" below for the night that wasn't enough.) Still nothing: this is
+//     a station without HD - keep the peak rule's gain, exactly as before build 39.
 //  3. THE WALK. From the starting gain:
 //       - UP, one look: at the highest gain that should still fit under the peak target (this
 //         gain's peak + the difference in gain). Taken if it does fit, shows HD and is BETTER.
@@ -1399,13 +1403,43 @@ static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint, boo
 //     38. If it still shows HD, the peak is sensible and the figure has not dropped by more
 //     than HINT_QUALITY_DROP_DB: use it, no search. A gain remembered by build 38 or earlier
 //     (hintQuality -1: chosen by its peak alone) is only where the walk starts, as above.
+//
+// Build 41 - two holes found in Long Beach (11-20 and 11-23):
+//   - "No HD" when there WAS HD, lower down. On 11-20 the tuner was overloaded by strong
+//     stations OUTSIDE the 1.5 MHz we look at. The peak we measure only sees what is inside,
+//     so it barely moved with the gain: the peak rule picked 40.2 dB (or more), the sidebands
+//     were buried there and 6 dB lower, and the search gave up - "no HD sidebands" - while the
+//     peak search itself had ALREADY measured 20.7 dB with the HD standing 7.3 dB out of the
+//     noise (seen again on KDAY recordings scaled to the same "quiet but overloaded" peaks).
+//     Now step 2 uses such a gain if the search has one, and otherwise keeps looking down.
+//     What it costs on a station without HD: usually ONE burst more than before (the peak
+//     falls 6 dB per stride, so it is under -16 dBFS after a stride or two), about 11 ms on a
+//     USB dongle, 0.12 s over rtl_tcp. Only where the peak does not follow the gain at all
+//     (that same overload, on a station without HD) does it walk to the lowest step.
+//   - A remembered gain accepted while clipping. A remembered gain used to pass with a peak
+//     up to -1.5 dBFS (HINT_MAX_DBFS, the AM rule). On 103.5 KOST, 33.8 dB loses the HD
+//     altogether, yet one burst there now and then read -2.1 dBFS with the sidebands looking
+//     fine (the overloaded figure jumps about), and 33.8 was kept - in 2 of 16 tunes. FM now
+//     asks of a remembered gain what the search asks of any gain: a peak under -4 dBFS
+//     (HINT_MAX_FM_DBFS). 0 of 16. AM keeps -1.5.
+//   - ... but not thrown away either (the LA / KGGI tests later that day). A weak station next to
+//     loud ones can be at its best between -4 and -1.5 dBFS: 99.1 KGGI in Long Beach, best at
+//     19.7-20.7 dB with a peak of -2.6 / -1.6 (its neighbours'). Remembered there, the -4 rule
+//     made it search every tune - and the peak rule's 14.4 dB (BER 22 %) won, 16 tunes of 16. So
+//     such a gain, if its HD still looks as good as when it was remembered, now COMPETES with the
+//     search: the search runs as usual, and the remembered gain wins if the search finds no HD
+//     at all, or if its HD stands clearly (HINT_RIVAL_MARGIN_DB) farther out of the noise than at
+//     the search's choice, on the same sideband. KGGI: kept in 14 of 16 tunes again. 103.5 KOST
+//     in LA at gains with no sync at all: still searched, 0 of 16.
+static const float HINT_MAX_FM_DBFS = AUTO_TARGET_DBFS;   // build 41: a remembered FM gain must read under this (-4 dBFS) ...
+static const float HINT_RIVAL_MARGIN_DB = 1.5f;           // ... or compete with the search (-4 ... -1.5): win by this much
 static const float SWEEP_TIE_DB = 0.5f;               // "as good as the best": within this (one burst's scatter is 0.2-1.0 dB)
 static const float SWEEP_STOP_DB = 1.5f;              // "clearly worse": two such strides running end the walk down (3 dB less
                                                       //   gain costs 1.5-2.5 dB where the gain is not too high: KGGI 1.5, KDAY 2.2, KKLQ 2.5)
 static const float SWEEP_SURE_DB = 3.0f;              // "far worse": one such stride ends it
 static const float SWEEP_MIN_PEAK_DBFS = -16.0f;      // don't walk below a peak like this (KOST's best gains had -9 ... -11);
                                                       //   a remembered gain that is this quiet now is not used either
-static const int   SWEEP_SECOND_LOOK_TENTHS = 60;     // step 2: the second look is this far below the first (6 dB)
+static const int   SWEEP_SECOND_LOOK_TENTHS = 60;     // step 2: each look for HD lower down is this far below the last (6 dB)
 static const int   SWEEP_STRIDE_TENTHS = 30;          // step 3: the walk down goes at least this far at a time (3 dB)
 static const float SWEEP_CALM_PEAK_DBFS = -8.0f;      // "the tuner is calm": the peak is below this (KOST's jumpy recordings: -3.5 and -1.6)
 static const int   SWEEP_REUSE_TENTHS = 25;           // ... and up to this much farther, if that gain was measured already
@@ -1478,9 +1512,29 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
             if (measured[(size_t)i]) return i;
         return next;
     };
+    // Build 41 (later): HD "found" at a gain whose peak is under SWEEP_MIN_PEAK_DBFS doesn't count.
+    // That quiet, the dongle's own rounding noise is a large part of the floor, and the HD test can
+    // be fooled: analog-only 90.3 (recorded Sep 28, levelled to every V4 step) showed "HD" at 16.6 dB
+    // with a peak of -22 dBFS - 17 dB below the peak rule's gain - in 2 of 16 tunes of build 41 as
+    // first written. The rule was already meant ("the HD would be too weak there to be worth
+    // having", step 2 below; the walk in step 3 stops there too) - now the choice keeps to it.
+    auto loudEnough = [&](int i) { return seen[(size_t)i].peakDbfs > SWEEP_MIN_PEAK_DBFS; };
 
     // 1. Where to start: the remembered gain ...
     int start = -1;
+    int rival = -1;                                       // build 41: a remembered gain that competes with the search
+    float rivalFig = 0.0f;                                //   ... and its HD figure (its own better sideband)
+    // Build 41: the remembered gain wins - chosen as if it had passed the test below.
+    auto takeRival = [&](const char *why) {
+        g_src->setGain(gains[(size_t)rival]);
+        *chosenPeakDbfs = seen[(size_t)rival].peakDbfs;
+        *usedHint = true;
+        *swept = true;
+        *quality = hintQuality > 0 ? hintQuality : std::max(1, (int)lroundf(rivalFig * 10.0f));
+        LOGI("auto-gain: remembered %.1f dB is fine (%s; HD %.1f dB over the floor, peak %.1f dBFS)",
+             gains[(size_t)rival] / 10.0f, why, rivalFig, *chosenPeakDbfs);
+        return gains[(size_t)rival];
+    };
     const auto hintAt = std::find(gains.begin(), gains.end(), hintTenths);
     if (hintTenths >= 0 && hintAt != gains.end()) {
         const int h = (int)(hintAt - gains.begin());
@@ -1488,9 +1542,35 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
         const float peak = seen[(size_t)h].peakDbfs;
         const int s = hdSide(h);
         const float fig = s < 0 ? seen[(size_t)h].lower.overFloorDb : seen[(size_t)h].upper.overFloorDb;
-        if (hintQuality >= 0 && s != 0 && peak < HINT_MAX_DBFS && peak > SWEEP_MIN_PEAK_DBFS &&
+        // Build 41 (later): ... unless there is clearly more to be had higher up. A remembered gain is
+        // what was best THEN; 99.1 KGGI remembered 19.7 dB from a Long Beach evening when its
+        // neighbours were loud, and a few hours later 28.0 had room under the peak target and was
+        // clearly better (BER 6.6 % against 9.9 % at 22.9, HD audio after 2.6 s against 32 s) - but the
+        // remembered gain "still looked fine", so nothing looked higher. Now: if the peak leaves room
+        // for at least SWEEP_STRIDE_TENTHS more gain, ONE more burst at the highest gain that should
+        // still fit under the target; if the HD there stands clearly (SWEEP_TIE_DB) farther out of
+        // the noise, the remembered gain becomes the start of the usual walk (step 3: up, then down
+        // in strides) instead of the answer. Costs one burst where there is room (11 ms on a USB
+        // dongle, 0.12 s over rtl_tcp), nothing where there isn't.
+        bool betterUp = false, lookedUp = false;
+        if (hintQuality >= 0 && s != 0 && peak < HINT_MAX_FM_DBFS && peak > SWEEP_MIN_PEAK_DBFS &&
+            fig >= hintQuality / 10.0f - HINT_QUALITY_DROP_DB) {
+            int up = h;
+            while (up + 1 < count && peak + (gains[(size_t)up + 1] - gains[(size_t)h]) / 10.0f < AUTO_TARGET_DBFS) up++;
+            if (gains[(size_t)up] - gains[(size_t)h] >= SWEEP_STRIDE_TENTHS) {
+                if (!look(up)) return -1;
+                lookedUp = true;
+                const gainscore::Side &u = s < 0 ? seen[(size_t)up].lower : seen[(size_t)up].upper;
+                betterUp = seen[(size_t)up].peakDbfs < AUTO_TARGET_DBFS && u.hd && u.overFloorDb > fig + SWEEP_TIE_DB;
+                if (betterUp)
+                    LOGI("auto-gain: remembered %.1f dB still fits, but %.1f dB shows better HD (%.1f against %.1f dB over the floor) - walking from the remembered gain",
+                         hintTenths / 10.0f, gains[(size_t)up] / 10.0f, u.overFloorDb, fig);
+            }
+        }
+        if (!betterUp && hintQuality >= 0 && s != 0 && peak < HINT_MAX_FM_DBFS && peak > SWEEP_MIN_PEAK_DBFS &&   // build 41: was HINT_MAX_DBFS
             fig >= hintQuality / 10.0f - HINT_QUALITY_DROP_DB) {
             // Build 39a: a tested gain that still looks as it did - no search (the gain is set).
+            if (lookedUp) g_src->setGain(hintTenths);     // (build 41: the look higher up moved it)
             *chosenPeakDbfs = peak;
             *usedHint = true;
             *swept = true;
@@ -1499,8 +1579,17 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
                  hintTenths / 10.0f, s < 0 ? "lower" : "upper", fig, hintQuality / 10.0f, peak);
             return hintTenths;
         }
+        // Build 41: louder than -4 dBFS but under -1.5, the HD as good as when it was remembered:
+        // the search runs as usual, and this gain competes with its result (see above).
+        else if (hintQuality >= 0 && s != 0 && peak >= HINT_MAX_FM_DBFS && peak < HINT_MAX_DBFS &&
+                 fig >= hintQuality / 10.0f - HINT_QUALITY_DROP_DB) {
+            rival = h;
+            rivalFig = fig;
+            LOGI("auto-gain: remembered %.1f dB reads %.1f dBFS (louder than %.1f) - searching; it competes with the result",
+                 hintTenths / 10.0f, peak, HINT_MAX_FM_DBFS);
+        }
         if (peak < AUTO_TARGET_DBFS && peak > SWEEP_MIN_PEAK_DBFS && s != 0) start = h;
-        else LOGI("auto-gain: remembered %.1f dB doesn't fit now - searching", hintTenths / 10.0f);
+        else if (rival < 0) LOGI("auto-gain: remembered %.1f dB doesn't fit now - searching", hintTenths / 10.0f);
     }
     const bool fromHint = start >= 0;
     // ... or the peak rule's gain: doAutoGain()'s "higher or lower?" search, step for step,
@@ -1516,15 +1605,29 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
         }
         if (!look(a)) return -1;
         const int byPeak = gains[(size_t)a];
-        // 2. Is there HD? At that gain, or a good step lower.
+        // 2. Is there HD? At that gain - or lower down (build 41, see above).
         if (hdSide(a) != 0) start = a;
         else {
-            const int lower = below(a, SWEEP_SECOND_LOOK_TENTHS);
-            if (lower < a) {
+            // (a) A gain below it that the peak search has measured already and that shows HD:
+            //     the highest such gain (the walk in step 3 then looks at everything below it).
+            for (int i = a - 1; i >= 0 && start < 0; i--)
+                if (measured[(size_t)i] && hdSide(i) != 0 && loudEnough(i)) start = i;
+            // (b) None: on down, 6 dB at a time, until HD shows. Stop when the peak at the gain
+            //     just measured is under SWEEP_MIN_PEAK_DBFS (the HD would be too weak there to
+            //     be worth having - and on a station without HD this ends the walk after a stride
+            //     or two), or at the lowest step. below() takes a gain measured already if one
+            //     is close to the 6 dB mark (it costs nothing; we know it shows no HD).
+            for (int at = a; start < 0 && at > 0 && seen[(size_t)at].peakDbfs > SWEEP_MIN_PEAK_DBFS; ) {
+                const int lower = below(at, SWEEP_SECOND_LOOK_TENTHS);
                 if (!look(lower)) return -1;
-                if (hdSide(lower) != 0) start = lower;
+                if (hdSide(lower) != 0 && loudEnough(lower)) start = lower;
+                at = lower;
             }
+            if (start >= 0)
+                LOGI("auto-gain: no HD sidebands at %.1f dB (the peak rule's gain) - HD at %.1f dB, walking from there",
+                     gains[(size_t)a] / 10.0f, gains[(size_t)start] / 10.0f);
         }
+        if (start < 0 && rival >= 0) return takeRival("the search found no HD below it");   // build 41
         if (start < 0) {
             g_src->setGain(byPeak);                       // no HD: the peak rule's gain, as before build 39
             *chosenPeakDbfs = seen[(size_t)a].peakDbfs;
@@ -1556,9 +1659,9 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
     int choice = top;
     auto choose = [&]() {
         best = side(top).overFloorDb;
-        for (int i = top; i >= 0; i--) if (measured[(size_t)i] && side(i).hd) best = std::max(best, side(i).overFloorDb);
+        for (int i = top; i >= 0; i--) if (measured[(size_t)i] && side(i).hd && loudEnough(i)) best = std::max(best, side(i).overFloorDb);
         choice = top;
-        for (int i = top; i >= 0; i--) if (measured[(size_t)i] && side(i).hd && side(i).overFloorDb >= best - SWEEP_TIE_DB) choice = i;
+        for (int i = top; i >= 0; i--) if (measured[(size_t)i] && side(i).hd && loudEnough(i) && side(i).overFloorDb >= best - SWEEP_TIE_DB) choice = i;
     };
     choose();
     // Down in strides from the choice, until a stride is far worse than the best, or clearly
@@ -1581,6 +1684,13 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
         at = std::min(next, choice);                                    // (the choice may be a gain measured earlier, lower still)
     }
     const int chosen = choice;
+    // Build 41: the remembered (louder) gain wins only if its HD is CLEARLY better - judged on the
+    // sideband the walk judged by, like every other comparison here.
+    if (rival >= 0 && rival != chosen && side(rival).hd &&
+        side(rival).overFloorDb > side(chosen).overFloorDb + HINT_RIVAL_MARGIN_DB) {
+        rivalFig = side(rival).overFloorDb;
+        return takeRival("clearly better HD than the search's");
+    }
 
     g_src->setGain(gains[(size_t)chosen]);
     *chosenPeakDbfs = seen[(size_t)chosen].peakDbfs;

@@ -683,11 +683,17 @@ class RadioService : Service() {
             return
         }
         val gain = Math.round(s.gainDb * 10)
-        val newGain = keeper.tick(now, gain, peak, s.locked, s.merCount, s.merLower, s.merUpper, s.gainSwept)
+        val newGain = keeper.tick(now, gain, peak, s.locked, s.merCount, s.merLower, s.merUpper, s.gainSwept,
+                                  fm = !s.am,          // build 41: the FM-only rules (GainKeeper's top) ...
+                                  // ... and rule 4 ("no sync -> lower"): only while the HD decoder runs
+                                  // (Auto or Digital only; Analog only = the analog demodulator alone),
+                                  // checked against the analog's quieting (-99 = not measured)
+                                  hdDecoding = !(s.demodOn && !s.auto), quietDb = s.fmQuietDb)
         if (newGain != GainKeeper.NO_CHANGE) {
             // (M10c step 2: "trying" = a MER try starts; the keeper decides after ~5 s.)
             Log.i(TAG, "Gain watchdog: peak %.1f dBFS, MER %.1f / %.1f -> %.1f dB%s".format(Locale.US,
-                peak, s.merLower, s.merUpper, newGain / 10.0, if (keeper.tryingTo >= 0) " (trying)" else ""))
+                peak, s.merLower, s.merUpper, newGain / 10.0,
+                if (keeper.walking) " (no HD sync: walking down)" else if (keeper.tryingTo >= 0) " (trying)" else ""))
             gainBusy = true
             val seq = retuneSeq.get()
             engine.execute {

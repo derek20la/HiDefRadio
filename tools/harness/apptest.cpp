@@ -154,6 +154,21 @@ int main(int argc, char **argv) {
             printf("%7.2f  >>> %s %d\n", t, e.what.c_str(), e.n);
         }
         if (t >= nextAlign) { nextAlign += 2.0; J(measureAlignmentNative)(E, nullptr); }   // Kotlin's alignWatcher
+        // Build 41: FMTRACE=1 prints, once a second, what RadioService hands the gain watchdog
+        // (GainKeeper.tick): the second's loudest peak, sync, the MER reading count and values -
+        // so the watchdog can be replayed on real recordings (and a file's MER / BER read off).
+        static double nextTrace = 1.0;
+        if (getenv("FMTRACE") && t >= nextTrace) {
+            nextTrace += 1.0;
+            const float peakMax = J(takePeakMaxNative)(E, nullptr);
+            std::string sig = str(J(getSignalNative)(E, nullptr));
+            std::map<std::string, std::string> kv; std::stringstream ss(sig); std::string line;
+            while (getline(ss, line)) { size_t eq = line.find('='); if (eq != std::string::npos) kv[line.substr(0, eq)] = line.substr(eq + 1); }
+            // (Build 41 final: + the analog FM's quieting and carrier level - the "no sync -> lower" walk's guard)
+            printf("TRACE %.2f peak %.1f synced %s merCount %s merLower %s merUpper %s ber %s berAvg %s quiet %s carrier %s crc %s\n", t, peakMax,
+                   kv["synced"].c_str(), kv["merCount"].c_str(), kv["merLower"].c_str(), kv["merUpper"].c_str(), kv["ber"].c_str(), kv["berAvg"].c_str(),
+                   kv["fmQuietDb"].c_str(), kv["fmCarrierDb"].c_str(), kv["crcErrors"].c_str());
+        }
         static bool speedStarted = false;           // SPEEDTEST=5: press the button once, at 5 s
         if (getenv("SPEEDTEST") && !speedStarted && t >= atof(getenv("SPEEDTEST"))) {
             speedStarted = true;

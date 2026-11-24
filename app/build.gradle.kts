@@ -35,8 +35,8 @@ android {
         // versionCode = the BUILD NUMBER: goes up by one with every step that changes the app,
         // and must go up with every upload to Google Play. versionName is what people see.
         // Settings > About shows both: "Version 1.0-beta1 (build 1)".
-        versionCode = 40
-        versionName = "1.4"
+        versionCode = 41
+        versionName = "1.4.1"       // build 41: FM auto-gain fixes (a bug-fix release on top of 1.4)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

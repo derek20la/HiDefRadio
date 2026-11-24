@@ -1477,6 +1477,8 @@ class MainActivity : AppCompatActivity() {
      * "↓1 ↑2 · last ↑ 7.7 → 8.7 dB, 42 s ago". Empty list = no row.
      * Step 2, second line: the MER tries - "MER tries 3, kept 1" or
      * "trying 15.7 dB…" while one runs (the Gain row shows the tried gain then).
+     * Build 41: "no HD sync - trying 33.8 dB…" while the watchdog's rule 4 looks lower down for
+     * the sync a tune's HD gain didn't get (GainKeeper.kt, rule 4).
      */
     private fun watchdogRow(s: Signal): List<Pair<String, String>> {
         val keeper = RadioService.instance?.gainKeeper ?: return emptyList()
@@ -1488,9 +1490,11 @@ class MainActivity : AppCompatActivity() {
             String.format(Locale.US, "↓%d ↑%d · last %s %.1f → %.1f dB, %s",
                 keeper.downs, keeper.ups, arrow, keeper.lastFrom / 10.0, keeper.lastTo / 10.0, agoText)
         }
-        val tries = if (keeper.tryingTo >= 0)
-            String.format(Locale.US, "trying %.1f dB…", keeper.tryingTo / 10.0)
-        else "MER tries ${keeper.tries}, kept ${keeper.kept}"
+        val tries = when {
+            keeper.walking -> String.format(Locale.US, "no HD sync - trying %.1f dB…", keeper.tryingTo / 10.0)   // build 41
+            keeper.tryingTo >= 0 -> String.format(Locale.US, "trying %.1f dB…", keeper.tryingTo / 10.0)
+            else -> "MER tries ${keeper.tries}, kept ${keeper.kept}"
+        }
         return listOf("Watchdog" to "$changes\n$tries")
     }
 
