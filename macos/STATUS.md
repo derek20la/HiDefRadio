@@ -1,6 +1,6 @@
 # macOS port: status
 
-## Step 0: the move into core/ (done on the Mac, 2026-11-24; phone test still to do)
+## Step 0: the move into core/ (done, 2026-11-24; phone test passed)
 
 **What changed:**
 - `git mv`: `native-lib.cpp` and the 15 headers -> `core/src/`, `nrsc5-config/` -> `core/`,
@@ -20,8 +20,8 @@
    own folder. (This check needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with Homebrew's CMake 4.5,
    because FFTW asks for CMake 3.0. Android's CMake 3.22 doesn't need it.)
 
-**Found during the phone test:** our rtl-sdr-blog copy has no `cmake/Modules/` (two upstream
-`.cmake` helpers). Its own `.gitignore` (`*.cmake`) kept them out when it was first added, so they
+**Found during the phone test:** our rtl-sdr-blog copy is missing two upstream files,
+`cmake/Modules/Version.cmake` and `cmake/rtlsdrConfig.cmake`. Its own `.gitignore` (`*.cmake`) kept them out when it was first added, so they
 were only ever on the Lenovo. The Android build doesn't use them: all six librtlsdr `.c` files compile
 from the committed files with the Android flags. In 0b, `vendor.sh` brings them back, and the pin check
 looks for the same problem in the other libraries.
@@ -29,10 +29,18 @@ looks for the same problem in the other libraries.
 **Not run:** `objcheck.sh` (needs a JDK, g++ and `sha256sum`) and `lrcheck/run.sh` (clones
 ngsoftfm from GitHub). Their paths were updated but not tested.
 
-**What I need from you (the phone test):** the branch is pushed. On the LENOVO, open a new
-Claude chat in the project and say "Run git pull, then read macos/LENOVO.md and follow it."
-It cleans up, builds, installs the debug app and walks you through the phone checks. Paste its
-summary into the MacBook chat. Step 0b starts after that.
+**Phone test (Lenovo, 2026-11-24): passed.**
+- Clean build (`app/.cxx` and `app/build` deleted): `gradlew clean assembleDebug` OK in 3 min,
+  no compiler warnings. Its `compile_commands.json`: 844 entries (843 in `core\external`, plus
+  `core\src\native-lib.cpp`), and none under `app\src\main\cpp`.
+- Debug app (1.4.1-dev, build 41) installed on the moto g stylus 5G (2024) next to the normal install.
+- FM HD syncs and blends analog -> HD; AM plays; the licences screen says "under core/external".
+- The two leftovers on the Lenovo (`cmake/Modules/Version.cmake`, `cmake/rtlsdrConfig.cmake`) were
+  deleted. rtl-sdr's own CMakeLists needs `Version.cmake`, so 0b must restore both.
+
+**Build number:** from now on, every step tested on the phone gets the next build number
+(`versionCode` in `app/build.gradle.kts`), so test installs can be told apart. Step 0b = build 42.
+A release from `main` in the meantime must skip past the branch's numbers.
 
 ## Step 0a: the harness on the Mac (done, 2026-11-24)
 
