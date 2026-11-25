@@ -1,5 +1,15 @@
 # macOS port: status
 
+## Where we stopped (2026-11-24, end of the day)
+
+- Done: 0a (harness on the Mac, baseline) and 0 (the move into `core/`, phone test passed).
+- Next: step 0b (the C API), build 42.
+- To decide first:
+  1. Install Android's command-line build tools on the MacBook (Homebrew: a JDK, the SDK
+     and the NDK), so phone builds no longer need the Lenovo. The commands are shown before
+     they run. Releases stay on the Lenovo.
+  2. The version-number proposal in `PLAN.md` ("Version numbers").
+
 ## Step 0: the move into core/ (done, 2026-11-24; phone test passed)
 
 **What changed:**

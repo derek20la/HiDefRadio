@@ -196,6 +196,29 @@ hidefradio 1260k                  # AM (the V4's upconverter is handled by the d
 - Later still: remembered gain, the FCC station list (`app/src/main/assets/stations`),
   logos and art.
 
+## Version numbers (proposal, 2026-11-24, not decided yet)
+
+Two numbers, as on Android today: the **version** people see (1.4.1) and the **build number**
+(Android's `versionCode`, the Mac's `CFBundleVersion`).
+
+- **One file holds both:** `version.properties` at the top of the repo (`VERSION=1.4.1`, `BUILD=42`).
+  - Android's `build.gradle.kts` reads it instead of having the numbers written in.
+  - The Mac build reads the same file into the app's Info.plist and `hidefradio --version`.
+  - The engine gets `hidef_version()` in `engine.h`, so both apps can show which engine they run.
+  - Done in its own small step, with a phone test (the app must show the same numbers as before).
+- **One build-number counter for everything:** both apps, both branches, test builds and releases.
+  - It goes up by one for every build that goes onto a device: a phone test, a Mac test, a release.
+  - The numbers never repeat. "Build 47" then means one exact commit, whichever app or branch it was.
+  - `tools/bump.sh` does the bump. It reads the number on `main` and on `macos-port`
+    (`git show <branch>:version.properties`), writes the higher one + 1, and says which it took,
+    so a release from `main` can't clash with a port build.
+- **The version follows the engine:**
+  - Same major.minor = same engine and features. The first Mac release takes the version of the
+    Android release it ships with (say both are 1.5).
+  - A fix in only one app bumps only the third number of that app (Mac 1.5.1 while Android stays 1.5).
+  - The next engine change brings both to the same new version again.
+- Debug builds keep the `-dev` ending (Android already does this), so test installs are easy to spot.
+
 ## Decisions (were open questions)
 
 1. **Recordings:** not copied into the repo. `regress.sh` reads them from `RECORDINGS=...`
