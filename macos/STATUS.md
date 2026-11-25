@@ -1,5 +1,35 @@
 # macOS port: status
 
+## Step 0: the move into core/ (done on the Mac, 2026-11-24; phone test still to do)
+
+**What changed:**
+- `git mv`: `native-lib.cpp` and the 15 headers -> `core/src/`, `nrsc5-config/` -> `core/`,
+  `external/` -> `core/`. 3932 renames, 0 lines changed inside them, so git keeps each file's history.
+  `app/src/main/cpp/` now holds only `CMakeLists.txt`, and `build.gradle.kts` is unchanged.
+- Only paths changed in: the Android `CMakeLists.txt` (`HIDEF_CORE` = `core/`); harness `build.sh`,
+  `objcheck.sh`, `regress.sh`, a comment in `drifttest.cpp`; `lrcheck/run.sh` and a comment in
+  `demod_app.cpp`; the READMEs, the links in `docs/how-the-blend-works.md`, and `NOTICES.txt`
+  (the About screen's licence text now says "under core/external").
+
+**Proof on the Mac:**
+1. `sh regress.sh check` after a clean harness build: IDENTICAL. The engine sources hash
+   `2e3b6428d9b76210` is the same as the baseline's.
+2. The Android CMake, configured on this Mac (host compiler, no NDK) before and after the move:
+   all 844 compile commands are the same files with the same flags. Only the object file names
+   in the build folder differ: CMake names objects after the full path for sources outside its
+   own folder. (This check needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with Homebrew's CMake 4.5,
+   because FFTW asks for CMake 3.0. Android's CMake 3.22 doesn't need it.)
+
+**Not run:** `objcheck.sh` (needs a JDK, g++ and `sha256sum`) and `lrcheck/run.sh` (clones
+ngsoftfm from GitHub). Their paths were updated but not tested.
+
+**What I need from you (the phone test):**
+1. Push the branch: `git push -u origin macos-port` (I haven't pushed).
+2. On the Android machine: `git fetch`, `git switch macos-port`, then in Android Studio
+   Build > Clean Project and run a debug build on the phone.
+3. Check: FM HD sync and the blend, an AM station, and Settings > About > Open-source licenses.
+4. Tell me the result. Step 0b starts after that.
+
 ## Step 0a: the harness on the Mac (done, 2026-11-24)
 
 **What changed (only `tools/harness/`):**
@@ -26,5 +56,4 @@
   change in step 0 anyway.
 - The baseline is for Apple clang 21.0.0 on arm64. Another compiler can give different numbers.
 
-**What I need from you:** nothing for 0a. Next is step 0 (the `git mv` into `core/`), which
-needs a phone test at the end: push the branch, pull it on the Android machine, clean debug build.
+**What I needed from you:** nothing for 0a.

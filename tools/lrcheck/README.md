@@ -2,7 +2,7 @@
 
 A stereo decoder with a sign error still sounds like stereo - only mirrored - and nobody
 notices. This folder is the test that settles it for the FM (analog) decoder in
-`app/src/main/cpp/fmdemod.hpp`, without trusting anybody's ears.
+`core/src/fmdemod.hpp`, without trusting anybody's ears.
 
     cd tools/lrcheck
     sh run.sh                    # the test signal only

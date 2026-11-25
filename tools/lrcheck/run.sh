@@ -2,7 +2,7 @@
 # Left/right check of the FM stereo decoder (see README.md).   sh run.sh [recording.cu8]
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP=${APP:-$HERE/../../app/src/main/cpp}
+APP=${APP:-$HERE/../../core/src}
 mkdir -p "$HERE/build" && cd "$HERE/build"
 [ -d ngsoftfm ] || git clone --depth 1 https://github.com/f4exb/ngsoftfm.git
 # one portability fix: "abs" there is the integer one with some compilers, which stops the pilot PLL from locking

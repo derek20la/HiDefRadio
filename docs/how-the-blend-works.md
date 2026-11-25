@@ -53,7 +53,7 @@ The dongle delivers raw radio, 1,488,375 complex samples ("IQ") per second, cent
                               speaker
 ```
 
-- **[`fmdemod.hpp`](../app/src/main/cpp/fmdemod.hpp)** filters out the analog part of the channel (and with it the HD carriers, which would otherwise sound like a loud hiss), demodulates the FM, decodes stereo and measures how clean the signal is. Its first audio comes within a second of tuning.
+- **[`fmdemod.hpp`](../core/src/fmdemod.hpp)** filters out the analog part of the channel (and with it the HD carriers, which would otherwise sound like a loud hiss), demodulates the FM, decodes stereo and measures how clean the signal is. Its first audio comes within a second of tuning.
 - **libnrsc5** ([nrsc5 on GitHub](https://github.com/theori-io/nrsc5); since 1.2 with HiDef Radio's own patches) decodes the HD Radio signal. It needs about 0.5 s to find the digital signal and another 2 to 3 seconds before the first audio.
 
 Here is the first surprise: nrsc5 hands out its audio *sooner* than a car radio's chip does. In this app the HD audio for any moment of the song arrives **about 2.5 seconds before** the analog audio of the same moment. The station's diversity delay was meant to make up for a slow decoder; with a fast one it turns into a head start for the HD.
@@ -71,7 +71,7 @@ To switch without a skip the app must know the delay to within a fraction of a m
 | KKLQ 100.3 | 2457–2468 ms |
 | KDAY 93.5 | 2886–2912 ms |
 
-It is each station's own setting, and a few drift. So **[`aligner.hpp`](../app/src/main/cpp/aligner.hpp)** measures it on every tune, from the audio itself.
+It is each station's own setting, and a few drift. So **[`aligner.hpp`](../core/src/aligner.hpp)** measures it on every tune, from the audio itself.
 
 **The idea.** Take the last 3 seconds of analog audio as a *template*. Slide it along the HD audio of the last several seconds. At every position compute how alike the two are, as a *correlation coefficient*: 1.0 means the same shape, 0 means unrelated. Where they are most alike, that's the delay.
 
@@ -102,7 +102,7 @@ The second surprise, found by the app's first outside tester: one stream of samp
 
 A crystal that is 57 parts per million fast (normal for an older dongle without a temperature-compensated crystal) makes the analog gain 2.5 frames on the HD every second. Two delay measurements 5 seconds apart then differ by 13 frames, they never agree, and the blend never starts. On an RTL-SDR Blog V3 or V4 (1 ppm) the effect is 25 times smaller, which is why it went unnoticed at first.
 
-**[`drift.hpp`](../app/src/main/cpp/drift.hpp)** fixes it in two parts:
+**[`drift.hpp`](../core/src/drift.hpp)** fixes it in two parts:
 
 - **A resampler** (`drift::Stretch`) stretches or squeezes the analog audio by those few millionths, so it keeps the station's time. Its error is about −99 dB, and at zero correction it copies the audio bit for bit.
 - **A tracker** (`drift::Tracker`) works out how much to stretch. It has two witnesses to the crystal's error:
@@ -123,7 +123,7 @@ Whatever difference is left, the blend corrects on the **analog** side (at most 
 
 ## 6. The crossfade
 
-**[`blend.hpp`](../app/src/main/cpp/blend.hpp)** keeps both streams in ring buffers on one time line, counted in audio frames since the tune:
+**[`blend.hpp`](../core/src/blend.hpp)** keeps both streams in ring buffers on one time line, counted in audio frames since the tune:
 
 - the analog audio, about 4 seconds of it, and
 - the HD audio, 6 seconds, with one flag per frame: **good**, or **bad** (a 2,048-frame piece that is all zeros is a dropout nrsc5 filled in), or **not received**.
@@ -171,7 +171,7 @@ Sometimes the aligner never finds a match. There are three reasons, and the app 
 
 1. **The same station, processed very differently.** Some stations run their HD and analog through different audio processing, and the correlation never reaches 0.5. Since 1.2.1 weaker results that agree with each other are accepted (above), so such a station usually gets the aligned blend too. If they don't agree, and RDS (the analog's data) and the HD both name the same call letters, the app knows it is one station and plays the HD anyway, without time alignment. After 20 seconds without a match it does so with a one-time jump of about 2.5 s, 0.3 s behind live.
 2. **The HD belongs to another station.** A DXer meets this: a distant station's HD and a local station's analog on one frequency. The setting *"If the HD signal is another station's"* decides: play that HD anyway, or stay on the analog.
-3. **Two stations taking turns.** With a distant station fading in and out over a local one, the analog you hear can switch between two stations from second to second (on 91.1 west of Los Angeles, KDSC's HD with the analog of XETRA-FM, "91X"). Falling back on "the analog" in every HD dropout would then swap between two programmes several times a minute. **[`stationid.hpp`](../app/src/main/cpp/stationid.hpp)** collects the evidence: which RDS code belongs to the HD station (its call letters, or the audio matching closely while that code was on the air), and whether a *different* code is coming in now. It says "another station" only when the audio agrees, meaning three attempts in a row that found no likeness although the HD audio was really there. From then on the blend plays **the HD alone**, like an HD2 sub-channel. In a dropout you hear silence, never the other station's programme. After 10 seconds of silence (you drove out of range) the other station's analog is given back. A line on the screen offers a tap to listen to the other station.
+3. **Two stations taking turns.** With a distant station fading in and out over a local one, the analog you hear can switch between two stations from second to second (on 91.1 west of Los Angeles, KDSC's HD with the analog of XETRA-FM, "91X"). Falling back on "the analog" in every HD dropout would then swap between two programmes several times a minute. **[`stationid.hpp`](../core/src/stationid.hpp)** collects the evidence: which RDS code belongs to the HD station (its call letters, or the audio matching closely while that code was on the air), and whether a *different* code is coming in now. It says "another station" only when the audio agrees, meaning three attempts in a row that found no likeness although the HD audio was really there. From then on the blend plays **the HD alone**, like an HD2 sub-channel. In a dropout you hear silence, never the other station's programme. After 10 seconds of silence (you drove out of range) the other station's analog is given back. A line on the screen offers a tap to listen to the other station.
 
 Because a "no match" can also mean the HD audio simply wasn't there yet, the aligner reports how much of the searched HD stretch held real audio (`hdCover`), and only attempts with real audio count as evidence.
 

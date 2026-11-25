@@ -118,7 +118,7 @@ Please tell me which phone and dongle you use and what works or doesn't: open an
 2. Clone this repository and open the folder in Android Studio.
 3. **Build → Assemble Project**, then run it on your phone. Wireless debugging works well, since the phone's USB port is taken by the dongle.
 
-All native libraries are built from source by Android Studio's CMake. Their sources are in `app/src/main/cpp/external`, so nothing needs to be downloaded or installed separately.
+All native libraries are built from source by Android Studio's CMake. Their sources are in `core/external`, so nothing needs to be downloaded or installed separately.
 
 Good to know:
 
@@ -174,7 +174,7 @@ FM stereo has a blend of its own: full stereo above 36 dB of quieting, mono belo
 
 ### Where things are
 
-- `app/src/main/cpp/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
+- `core/src/native-lib.cpp` is the C++ side. It opens the sample source, streams samples into nrsc5 and the FM demodulator, handles nrsc5's events and keeps the audio ring buffers.
 - `iqsource.hpp` says what the radio needs from a sample source (tune, set the gain, deliver samples); `iqsource_usb.hpp` is the RTL-SDR dongle on the USB port, and the only file that calls librtlsdr. `iqsource_tcp.hpp` (1.2) is the other source: a dongle on another computer, over the network (rtl_tcp).
 - `iqrecord.hpp` (1.3) records the samples into a file, untouched, on a writer thread of its own (the IQ half of ⏺).
 - Next to it are nine self-contained C++17 headers with no Android code in them:
@@ -250,7 +250,7 @@ HiDef Radio stands on the shoulders of these projects:
   - the sync-loss grace period
   - fades on program switch
 
-Each library's own license file is in its folder under `app/src/main/cpp/external`. Inside the app, **Settings → About → Open-source licenses** shows the credits and the full license texts.
+Each library's own license file is in its folder under `core/external`. Inside the app, **Settings → About → Open-source licenses** shows the credits and the full license texts.
 
 ## Trademarks
 

@@ -18,7 +18,7 @@
 # The "# build:" lines (compiler, flags) must match: a difference then can only be our code.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP=${APP:-$HERE/../../app/src/main/cpp}
+SRC=${CORE:-$HERE/../../core}/src
 R=${RECORDINGS:-"$HOME/Downloads/1260 AM/IQ"}
 PORT=${PORT:-12345}
 O=${OUT:-$HERE/build/regress}
@@ -104,8 +104,8 @@ clean() {
 }
 
 echo "# run: regress.sh, $(date '+%Y-%m-%d')"
-echo "# run: commit $(git -C "$HERE" rev-parse --short HEAD)$(git -C "$HERE" diff --quiet HEAD -- . "$APP" || echo ' (+ uncommitted changes)')"
-echo "# run: engine sources $(cat "$APP"/native-lib.cpp "$APP"/*.hpp | shasum -a 256 | cut -c1-16) (native-lib.cpp + *.hpp)"
+echo "# run: commit $(git -C "$HERE" rev-parse --short HEAD)$(git -C "$HERE" diff --quiet HEAD -- . "$SRC" || echo ' (+ uncommitted changes)')"
+echo "# run: engine sources $(cat "$SRC"/native-lib.cpp "$SRC"/*.hpp | shasum -a 256 | cut -c1-16) (native-lib.cpp + *.hpp)"
 echo "# run: recordings $R"
 clang --version | head -1 | sed 's/^/# build: /'
 sed 's/^/# build: /' "$B/flags.txt"

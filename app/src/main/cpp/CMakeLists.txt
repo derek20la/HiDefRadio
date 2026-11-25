@@ -40,12 +40,16 @@ else ()
 endif ()
 message(STATUS "HiDef Radio: NEON ${HIDEF_NEON} (ABI ${ANDROID_ABI}, processor ${CMAKE_SYSTEM_PROCESSOR})")
 
+# macOS port, step 0: the engine and every library live in core/ at the top of the repo (one copy,
+# later built by the Mac app too). Only the paths changed; the build is the same.
+get_filename_component(HIDEF_CORE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../core" ABSOLUTE)
+
 # ---------------------------------------------------------------------------
 # libusb (static library)
 # Talks to USB devices. We compile its C files ourselves instead of running
 # its Unix ./configure script; android/config.h replaces what configure makes.
 # ---------------------------------------------------------------------------
-set(LIBUSB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libusb)
+set(LIBUSB_DIR ${HIDEF_CORE}/external/libusb)
 
 add_library(usb-1.0 STATIC
         # Core (works on every operating system)
@@ -81,7 +85,7 @@ target_link_libraries(usb-1.0 PUBLIC log)
 # Knows how to talk to the RTL2832U chip and its tuner chips. Uses libusb.
 # We only build the library part - not the command-line tools (rtl_fm etc.).
 # ---------------------------------------------------------------------------
-set(RTLSDR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/rtl-sdr-blog)
+set(RTLSDR_DIR ${HIDEF_CORE}/external/rtl-sdr-blog)
 
 add_library(rtlsdr STATIC
         ${RTLSDR_DIR}/src/librtlsdr.c       # main library (open, tune, read samples)
@@ -115,14 +119,14 @@ set(BUILD_TESTS       OFF CACHE BOOL "FFTW: don't build test programs" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries"          FORCE)
 
 # EXCLUDE_FROM_ALL = only build the parts something actually links to.
-add_subdirectory(external/fftw EXCLUDE_FROM_ALL)
+add_subdirectory(${HIDEF_CORE}/external/fftw ${CMAKE_CURRENT_BINARY_DIR}/external/fftw EXCLUDE_FROM_ALL)
 
 # fftw3.h lives in fftw/api - make it visible to whoever links fftw3f (nrsc5).
 # $<BUILD_INTERFACE:...> means "use this path while building". It's needed
 # because FFTW's CMakeLists also sets up "install/export" rules, and CMake
 # refuses to export a path that points inside the source folder.
 target_include_directories(fftw3f PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/api>)
+        $<BUILD_INTERFACE:${HIDEF_CORE}/external/fftw/api>)
 
 # FFTW's NEON codelets (build 14). FFTW's own CMakeLists knows SSE2 and AVX but
 # not NEON (its config.h.in leaves HAVE_NEON undefined, and the neon/ codelet
@@ -132,12 +136,12 @@ target_include_directories(fftw3f PUBLIC
 # HAVE_NEON=1 is defined for it (that also switches on simd-support/neon.c and
 # the NEON entries in dft/conf.c and rdft/conf.c). simd-support/simd-neon.h
 # needs the compiler's __ARM_NEON, which the arm64 target has by itself.
-# (One line in external/fftw/simd-support/neon.c was changed for arm64 - see
+# (One line in core/external/fftw/simd-support/neon.c was changed for arm64 - see
 # the note at the top of that file.)
 if (HIDEF_NEON)
     file(GLOB fftw_neon_SOURCES
-            ${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/dft/simd/neon/*.c
-            ${CMAKE_CURRENT_SOURCE_DIR}/external/fftw/rdft/simd/neon/*.c)
+            ${HIDEF_CORE}/external/fftw/dft/simd/neon/*.c
+            ${HIDEF_CORE}/external/fftw/rdft/simd/neon/*.c)
     target_sources(fftw3f PRIVATE ${fftw_neon_SOURCES})
     target_compile_definitions(fftw3f PRIVATE HAVE_NEON=1)
 endif ()
@@ -145,7 +149,7 @@ endif ()
 # ---------------------------------------------------------------------------
 # FAAD2 2.11.2 + nrsc5's HDC patch (static library "faad_hdc")
 # AAC audio decoder. HD Radio uses a special AAC variant ("HDC"); the patch
-# (external/nrsc5/support/faad2-hdc-support.patch, already applied to these
+# (core/external/nrsc5/support/faad2-hdc-support.patch, already applied to these
 # sources) adds a "faad_hdc" library that can decode it.
 # ---------------------------------------------------------------------------
 set(FAAD_BUILD_CLI OFF CACHE BOOL "FAAD2: don't build the faad command-line tool" FORCE)
@@ -153,7 +157,7 @@ set(FAAD_BUILD_CLI OFF CACHE BOOL "FAAD2: don't build the faad command-line tool
 # FAAD2 notices it is inside another project ("bundled mode") and then builds
 # static libraries and skips install rules. EXCLUDE_FROM_ALL = only faad_hdc
 # gets built (not faad, faad_drm, faad_fixed...), because only it is linked.
-add_subdirectory(external/faad2 EXCLUDE_FROM_ALL)
+add_subdirectory(${HIDEF_CORE}/external/faad2 ${CMAKE_CURRENT_BINARY_DIR}/external/faad2 EXCLUDE_FROM_ALL)
 
 # ---------------------------------------------------------------------------
 # nrsc5 v3.2.0 (static library "nrsc5") - the HD Radio decoder itself
@@ -161,7 +165,7 @@ add_subdirectory(external/faad2 EXCLUDE_FROM_ALL)
 # nrsc5's own build generates a config.h; we use our hand-written one in
 # nrsc5-config/config.h instead (like libusb's android/config.h).
 # ---------------------------------------------------------------------------
-set(NRSC5_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/nrsc5)
+set(NRSC5_DIR ${HIDEF_CORE}/external/nrsc5)
 
 add_library(nrsc5 STATIC
         ${NRSC5_DIR}/src/acquire.c       # find the HD signal
@@ -193,7 +197,7 @@ if (HIDEF_NEON)
 endif ()
 
 target_include_directories(nrsc5
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/nrsc5-config   # our config.h
+        PRIVATE ${HIDEF_CORE}/nrsc5-config   # our config.h
                 ${NRSC5_DIR}/src
         PUBLIC  ${NRSC5_DIR}/include)                      # nrsc5.h (for our code)
 
@@ -215,7 +219,7 @@ target_link_libraries(nrsc5 PUBLIC faad_hdc fftw3f rtlsdr m)
 # used in the AndroidManifest.xml file.
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
-        native-lib.cpp)
+        ${HIDEF_CORE}/src/native-lib.cpp)
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this

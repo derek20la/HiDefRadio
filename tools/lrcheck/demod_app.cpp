@@ -1,4 +1,4 @@
-// The app's own FM demodulator (app/src/main/cpp/fmdemod.hpp) on a .cu8 file
+// The app's own FM demodulator (core/src/fmdemod.hpp) on a .cu8 file
 // -> raw float32 stereo, 44.1 kHz.   usage: demod_app in.cu8 out.f32
 #include "fmdemod.hpp"
 #include <cstdio>

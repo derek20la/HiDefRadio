@@ -20,7 +20,7 @@
 //   drifttest tracker [v]           only the tests of the Tracker alone (build 8): measurements written
 //                                   down by hand, among them the fault a tester's video showed.
 //
-// build:  clang++ -std=c++17 -O2 -I ../../app/src/main/cpp drifttest.cpp -o drifttest
+// build:  clang++ -std=c++17 -O2 -I ../../core/src drifttest.cpp -o drifttest
 #include "aligner.hpp"
 #include "blend.hpp"
 #include "drift.hpp"

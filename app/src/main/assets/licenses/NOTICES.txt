@@ -11,7 +11,7 @@ Source code: https://github.com/derek20la/HiDefRadio
 
 
 BUILT-IN LIBRARIES
-(Their source code is included in the HiDef Radio repository, under app/src/main/cpp/external.)
+(Their source code is included in the HiDef Radio repository, under core/external.)
 
 nrsc5 v3.2.0 — the HD Radio (NRSC-5) decoder
 https://github.com/theori-io/nrsc5

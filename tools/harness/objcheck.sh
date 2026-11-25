@@ -15,11 +15,11 @@
 # Used for the documentation pass of 2026-10-15 (every object file identical before and after).
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP=${APP:-$HERE/../../app/src/main/cpp}
+CORE=${CORE:-$HERE/../../core}
 B=$HERE/build
 [ -d "$B/nrsc5" ] || { echo "run build.sh first" >&2; exit 1; }
 OUT=$(mktemp -d)
-mkdir -p "$OUT/src" && cp "$APP"/native-lib.cpp "$APP"/*.hpp "$OUT/src/"
+mkdir -p "$OUT/src" && cp "$CORE"/src/native-lib.cpp "$CORE"/src/*.hpp "$OUT/src/"
 cp "$HERE"/blendtest.cpp "$HERE"/drifttest.cpp "$HERE"/searchtest.cpp "$HERE"/identtest.cpp "$OUT/src/"
 J=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}
 INC="-I $B/stub -I $B/nrsc5/include -I $B/rtl-sdr-blog/include -I $J/include -I $J/include/linux"

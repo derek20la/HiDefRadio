@@ -1,6 +1,6 @@
 # The desktop harness
 
-Runs the app's **whole native engine** (`app/src/main/cpp/native-lib.cpp` with the FM
+Runs the app's **whole native engine** (`core/src/native-lib.cpp` with the FM
 demodulator, the aligner, the blend, RDS and libnrsc5) on a PC against an IQ recording -
 no phone, no dongle. It is how every DSP step of HiDef Radio was tested, and it is a small
 example of driving the engine outside Android.
@@ -100,7 +100,7 @@ line's "whole harness" figure includes the test's own work.
 How it works: `rtl_stub.c` is a fake librtlsdr that "receives" the file, `fftw3.h` is a tiny
 stand-in for FFTW, `apptest.cpp` includes `native-lib.cpp` and calls its JNI functions with a
 fake `JNIEnv`. nrsc5, FAAD2 and the librtlsdr headers are copied into `build/` from the app's
-vendored copies (`app/src/main/cpp/external`), so the harness runs exactly the decoder the app
+vendored copies (`core/external`), so the harness runs exactly the decoder the app
 ships, HiDef Radio's nrsc5 patches included (until build 26 it downloaded them from GitHub).
 `NRSC5_SRC=<dir>` builds another nrsc5 tree instead - see "The faster HD search" below.
 
@@ -274,7 +274,7 @@ gain is asked for), KRTH on a V3, and a dongle that fails to open.
 
 ## rtl_tcp (1.2): rtltcp_replay.py, SOURCE=tcp:..., tcptest
 
-`app/src/main/cpp/iqsource_tcp.hpp` (iq::TcpSource) takes the samples from an rtl_tcp server
+`core/src/iqsource_tcp.hpp` (iq::TcpSource) takes the samples from an rtl_tcp server
 instead of the USB dongle. To test it without a dongle, `rtltcp_replay.py` is a stand-in
 server that plays a .cu8 recording and speaks the real protocol (12-byte "RTL0" greeting, raw
 cu8, 5-byte commands, which it logs with `--trace`):
@@ -302,7 +302,7 @@ client does); `--speed X`, `--cut-after S` (the server dies after S seconds), `-
 --gains N` (what the greeting says). `apptest` gets `SOURCE=tcp:host:port`; `build.sh` builds
 it with `-DHIDEF_HARNESS`, which gives TcpSource the virtual-time hook. `tcptest.cpp` is the
 source alone against a live replay, for the thread sanitizer:
-`g++ -std=c++17 -fsanitize=thread -I build/stub -I ../../app/src/main/cpp tcptest.cpp -o tcptest -lpthread`.
+`g++ -std=c++17 -fsanitize=thread -I build/stub -I ../../core/src tcptest.cpp -o tcptest -lpthread`.
 
 Results on 2026-10-24: through the socket = bit for bit the USB path on KRTH (FM, Auto, 30 s)
 and KBRT 740 (AM, Auto, 40 s); the server got rate / freq / gain mode / gain 30.0 dB. Live
