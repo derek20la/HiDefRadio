@@ -6,8 +6,22 @@ no phone, no dongle. It is how every DSP step of HiDef Radio was tested, and it 
 example of driving the engine outside Android.
 
     cd tools/harness
-    sh build.sh                      # Linux / macOS: cmake, gcc, clang++, a JDK (for jni.h)
+    sh build.sh                      # Linux / macOS: cmake, gcc, clang++, no JDK (jni.h is our own)
     IQFILE=klos.cu8 IQPACE=1 WAVOUT=out.wav build/apptest 95500000 2 34
+
+**`regress.sh`** (macOS port, step 0a) is the proof that a refactor changed nothing: it builds,
+plays a fixed set of runs (`IQSTEP=1`) of five recordings - KMZT 1260-3, XEKA 950, KKLQ, KOST,
+Z90 - in HD only / Auto / Analog only, with a program switch, mono, clock correction off,
+auto-gain, an IQ recording and the rtl_tcp path, plus blendtest, drifttest, amtest, identtest,
+pstest, gaintest and searchtest, and prints one SHA-256 per output (about 90 s on an M-series Mac).
+WAV and `.cu8` outputs must match byte for byte; the text logs are compared with the real-clock
+figures blanked (the list is in the script). The recordings stay outside the repo:
+
+    sh regress.sh check                                      # runs, then compares with regress-baseline.txt
+    RECORDINGS="/path/to/IQ" sh regress.sh > regress-baseline.txt   # record a new baseline
+
+`regress-baseline.txt` was recorded on the engine of `main` 6dbcf17 with Apple clang 21; its
+`# build:` lines (compiler, flags) must match too, so a difference can only come from the code.
 
 - `IQFILE`  a `.cu8` recording at 1,488,375 samples/s - exactly what `nrsc5 -w file.cu8 95.5 0` writes.
 - `IQPACE=1` plays it in real time (needed for anything that depends on timing: Auto, the blend).

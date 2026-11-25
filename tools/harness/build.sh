@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the desktop harness: the app's whole native engine (native-lib.cpp) playing a .cu8
-# recording on a PC (Linux / macOS; needs cmake, gcc, clang++ and a JDK for jni.h).
+# recording on a PC (Linux / macOS; needs cmake, gcc and clang++ - no JDK: jni.h is our own).
 #
 #   cd tools/harness && sh build.sh
 #
@@ -32,8 +32,13 @@ for f in nrsc5/src/*.c; do b=$(basename $f .c); [ $b = main ] && continue; [ $b 
   gcc -O2 -w -std=gnu11 -D_GNU_SOURCE -DHAVE_FAAD2 -DUSE_FAAD2 -I cfg -I shim -I nrsc5/src -I nrsc5/include -I rtl-sdr-blog/include -I faad2/include -c $f -o obj/$b.o; done
 ar rcs libnrsc5.a obj/*.o
 gcc -O2 -w -I rtl-sdr-blog/include -c rtl_stub.c -o rtl_stub.o
-J=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}
-clang++ -std=c++17 -O2 -w -DHIDEF_HARNESS -I stub -I nrsc5/include -I rtl-sdr-blog/include -I "$J/include" -I "$J/include/linux" -I "$J/include/darwin" apptest.cpp rtl_stub.o libnrsc5.a faad2/build/libfaad_hdc.a -lpthread -lm -o apptest
+# macOS port, step 0a: jni.h is the harness's own (no JDK needed), and maccompat.h fills in the
+# two Linux-only calls on macOS (it does nothing on Linux). The flags are saved in flags.txt so
+# regress.sh can record exactly how the baseline was built.
+cp "$HERE/jni.h" stub/ && cp "$HERE/maccompat.h" .
+APPFLAGS="-std=c++17 -O2 -w -DHIDEF_HARNESS -include maccompat.h -I stub -I nrsc5/include -I rtl-sdr-blog/include"
+echo "nrsc5: gcc -O2 -w -std=gnu11 -D_GNU_SOURCE -DHAVE_FAAD2 -DUSE_FAAD2; apptest: clang++ $APPFLAGS; tests: clang++ -std=c++17 -O2 (mkhdgap, mkcochannel -O3) -w" > flags.txt
+clang++ $APPFLAGS apptest.cpp rtl_stub.o libnrsc5.a faad2/build/libfaad_hdc.a -lpthread -lm -o apptest
 clang++ -std=c++17 -O2 -w blendtest.cpp -o blendtest
 clang++ -std=c++17 -O2 -w drifttest.cpp -o drifttest
 clang++ -std=c++17 -O2 -w mkdrift.cpp -o mkdrift
