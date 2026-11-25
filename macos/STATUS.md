@@ -20,6 +20,12 @@
    own folder. (This check needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with Homebrew's CMake 4.5,
    because FFTW asks for CMake 3.0. Android's CMake 3.22 doesn't need it.)
 
+**Found during the phone test:** our rtl-sdr-blog copy has no `cmake/Modules/` (two upstream
+`.cmake` helpers). Its own `.gitignore` (`*.cmake`) kept them out when it was first added, so they
+were only ever on the Lenovo. The Android build doesn't use them: all six librtlsdr `.c` files compile
+from the committed files with the Android flags. In 0b, `vendor.sh` brings them back, and the pin check
+looks for the same problem in the other libraries.
+
 **Not run:** `objcheck.sh` (needs a JDK, g++ and `sha256sum`) and `lrcheck/run.sh` (clones
 ngsoftfm from GitHub). Their paths were updated but not tested.
 
