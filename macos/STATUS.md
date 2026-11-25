@@ -23,12 +23,10 @@
 **Not run:** `objcheck.sh` (needs a JDK, g++ and `sha256sum`) and `lrcheck/run.sh` (clones
 ngsoftfm from GitHub). Their paths were updated but not tested.
 
-**What I need from you (the phone test):**
-1. Push the branch: `git push -u origin macos-port` (I haven't pushed).
-2. On the Android machine: `git fetch`, `git switch macos-port`, then in Android Studio
-   Build > Clean Project and run a debug build on the phone.
-3. Check: FM HD sync and the blend, an AM station, and Settings > About > Open-source licenses.
-4. Tell me the result. Step 0b starts after that.
+**What I need from you (the phone test):** the branch is pushed. On the LENOVO, open a new
+Claude chat in the project and say "Run git pull, then read macos/LENOVO.md and follow it."
+It cleans up, builds, installs the debug app and walks you through the phone checks. Paste its
+summary into the MacBook chat. Step 0b starts after that.
 
 ## Step 0a: the harness on the Mac (done, 2026-11-24)
 
