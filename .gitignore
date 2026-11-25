@@ -28,3 +28,6 @@ keystore.properties
 /Claude outputs/
 # Android Studio's note of which phone the app was last run on (it holds the phone's serial number)
 /.idea/deploymentTargetSelector.xml
+
+# IQ recordings are big and stay outside the repo (regress.sh reads them from RECORDINGS=...)
+*.cu8

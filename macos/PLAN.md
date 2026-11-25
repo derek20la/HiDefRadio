@@ -68,12 +68,31 @@ tools/harness/                 builds from core/; from 0b it calls engine.h dire
 
 - A harness-only `jni.h` covering the 12 functions above, so no JDK is needed.
 - A Mac compatibility header passed to the compiler (`sched_getcpu`, `MSG_NOSIGNAL`).
+  Defining `MSG_NOSIGNAL` as 0 is fine here, for the harness only. The real fix for the Mac
+  build comes in 0b (see there).
 - `build.sh` made to work on macOS.
 - **`tools/harness/regress.sh`**: runs a fixed set of tests and prints a checksum for every
   output.
+  - **Recordings stay outside the repo.** `regress.sh` reads them from the folder given as
+    `RECORDINGS=...`, by default `"$HOME/Downloads/1260 AM/IQ"` (the path has a space, so
+    it is always quoted). Reading `~/Downloads` is allowed for these files only. `*.cu8` is
+    added to `.gitignore` as a safety net.
+  - **Baseline recordings:**
+
+    | File | What it covers |
+    |---|---|
+    | `1260-3.cu8` | AM HD (KMZT), run with `UNMATCHED=hd` |
+    | `950AM_XEKA_11-21_1118.cu8` | AM HD; analog lags HD by 961 ms |
+    | `kklq.cu8` | FM HD and the blend aligner |
+    | `HiDefRadio_2026-11-16_17-43-35_103.5MHz_1488375sps.cu8` | FM HD (KOST) |
+    | `HiDefRadio_2026-10-26_10-39-53_90.3MHz_1488375sps.cu8` | FM (Z90) |
+
+    There is no real C-QUAM recording, so `amtest` covers C-QUAM.
   - **Recording runs**, in deterministic mode (`IQSTEP=1`, where the same input gives the same
     numbers every run):
-    - HD only, analog only and Auto/blend;
+    - HD only and Auto/blend on the files above;
+    - "Analog only" on one FM file (KOST, so the forced analog path is tested on a station
+      that also has HD; Z90 already covers analog in Auto);
     - a program switch, mono, clock correction off and auto-gain;
     - an IQ recording;
     - the rtl_tcp path.
@@ -83,6 +102,9 @@ tools/harness/                 builds from core/; from 0b it calls engine.h dire
     real-clock timing fields removed.
 - Run it on today's `main` code (6dbcf17) to get the **baseline**. The same script then proves
   every later step, and future engine updates too.
+- **The baseline records how it was built:** the compiler version (`clang --version`) and the
+  exact harness compile flags are saved with the checksums. Every later step uses the same
+  compiler and flags, so a "not identical" result can only come from our changes.
 
 ## Step 0: the move (files only, no behaviour change)
 
@@ -110,15 +132,24 @@ tools/harness/                 builds from core/; from 0b it calls engine.h dire
   - a logging header (Logcat on Android, stderr on the Mac);
   - `UsbSource` gets an open-by-index next to open-by-fd, sharing the same describe text;
   - `sched_getcpu` and `MSG_NOSIGNAL` are only used on Linux and Android.
+  - On the Mac, the rtl_tcp socket gets `SO_NOSIGPIPE` (macOS has no `MSG_NOSIGNAL`).
+    Without it, the program is killed by SIGPIPE when an rtl_tcp server drops the
+    connection.
 - **CMake:** one `core/CMakeLists.txt` that both apps include.
 - **Pins:** `core/external/PINS.md` plus `tools/vendor.sh <lib> <commit>`, which downloads
   that commit into `core/external/<lib>` so `git diff` shows exactly what changed. Updating a
   library then means changing one pin and running one command.
-  - First check that the vendored nrsc5 matches `derek20la/nrsc5@9dff25a` (branch `hidef`).
+  - **Before switching any library to `vendor.sh`,** check that today's vendored copy
+    matches what is being pinned. If it doesn't, the difference is saved as a patch file
+    (`core/external/patches/<lib>.patch`) and listed in `PINS.md`.
+  - nrsc5: check against `derek20la/nrsc5@9dff25a` (branch `hidef`).
   - librtlsdr: fork `rtlsdrblog/rtl-sdr-blog` to `derek20la/rtl-sdr-blog`, branch `hidef`,
     carrying the `rtlsdr_open_fd` patch, so both libraries are pinned the same way
-    (waiting for approval, see the open questions).
-  - FFTW 3.3.10, FAAD2 2.11.2 and libusb 1.0.30 are pinned to their releases.
+    (approved). The `gh` command is shown to you before it runs; it will be
+    `gh repo fork rtlsdrblog/rtl-sdr-blog --clone=false`.
+  - FFTW is pinned to the official **3.3.10 release tarball and its SHA-256**, not a git
+    commit: FFTW's git repo doesn't include the generated codelets.
+  - FAAD2 2.11.2 and libusb 1.0.30 are pinned to their releases.
 - **Harness:** it switches to calling `engine.h` directly, exactly as the Mac app will.
 - **Proof:** `regress.sh` output identical, then another phone test.
 
@@ -137,9 +168,13 @@ hidefradio 1260k                  # AM (the V4's upconverter is handled by the d
 - **Threads:** the same rules as on Android.
   - The main thread plays Kotlin's "engine thread": every control call, plus the 2 s
     alignment timer.
-  - Only the Core Audio (AudioQueue) callback reads audio. It waits for 0.25 s of audio before
-    it starts and plays silence on a gap, like `AudioPlayer.kt`. Core Audio converts the
-    engine's 44.1 kHz to the Mac's output rate.
+  - **The AudioQueue callback never blocks.** A separate pull thread does what
+    `AudioPlayer.kt` does (0.25 s of pre-buffer, then the blocking read with its 200 ms
+    timeout) and fills a ring buffer. The callback only copies from the ring, and plays
+    silence when the ring is empty. Core Audio converts the engine's 44.1 kHz to the Mac's
+    output rate.
+  - SIGPIPE is ignored in the CLI as a second guard (the socket already has `SO_NOSIGPIPE`
+    from 0b).
 - **Build:** `macos/CMakeLists.txt` includes `core/` and links everything statically
   (Frameworks: IOKit, CoreFoundation, Security, AudioToolbox). No Homebrew libraries are
   needed at run time; the program depends only on Homebrew's cmake to build.
@@ -161,10 +196,9 @@ hidefradio 1260k                  # AM (the V4's upconverter is handled by the d
 - Later still: remembered gain, the FCC station list (`app/src/main/assets/stations`),
   logos and art.
 
-## Open questions
+## Decisions (were open questions)
 
-1. **Recordings for the regression check.** The repo only has nrsc5's `sample.xz` (an FM HD
-   station: HD and the blend). Are there `.cu8` recordings of AM HD, C-QUAM AM stereo and an
-   analog-only FM station that can be copied into `tools/harness/recordings/` (ignored by
-   git)? Without them those paths are covered only by the stand-alone tests.
-2. **Is it OK to create `derek20la/rtl-sdr-blog`** (fork, branch `hidef`) in step 0b?
+1. **Recordings:** not copied into the repo. `regress.sh` reads them from `RECORDINGS=...`
+   (see step 0a for the folder and the five files).
+2. **`derek20la/rtl-sdr-blog`:** yes, fork it (branch `hidef`) in step 0b. The `gh` command
+   is shown before it runs.
