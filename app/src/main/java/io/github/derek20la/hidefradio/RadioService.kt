@@ -688,7 +688,8 @@ class RadioService : Service() {
                                   // ... and rule 4 ("no sync -> lower"): only while the HD decoder runs
                                   // (Auto or Digital only; Analog only = the analog demodulator alone),
                                   // checked against the analog's quieting (-99 = not measured)
-                                  hdDecoding = !(s.demodOn && !s.auto), quietDb = s.fmQuietDb)
+                                  hdDecoding = !(s.demodOn && !s.auto), quietDb = s.fmQuietDb,
+                                  am = s.am)           // build 42: the AM rules (a real clip only; never above the tune's gain)
         if (newGain != GainKeeper.NO_CHANGE) {
             // (M10c step 2: "trying" = a MER try starts; the keeper decides after ~5 s.)
             Log.i(TAG, "Gain watchdog: peak %.1f dBFS, MER %.1f / %.1f -> %.1f dB%s".format(Locale.US,
@@ -707,7 +708,8 @@ class RadioService : Service() {
         // Build 39, FM: only a gain that was TESTED - chosen by the tune's quality sweep or by a
         // MER try that was kept (keeper.gainTrusted) - not one the peak rules moved to. (A gain
         // the watchdog climbed to "because it was quiet" is how 103.5 KOST got a remembered gain
-        // that killed its HD, tune after tune.) AM: as before.
+        // that killed its HD, tune after tune.) AM: as before (build 42: the AM search doesn't use it -
+        // it measures on every tune - but it does no harm either).
         if (s.locked && (s.am || keeper.gainTrusted) && keeper.stableForMs(now) >= REMEMBER_GAIN_AFTER_MS) {
             // Build 39a, FM: with the sweep's HD figure for this gain, or 0 = "tested" if a MER try
             // moved it since - a tested gain needs no search next time (doAutoGainFm in native-lib.cpp).

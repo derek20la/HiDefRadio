@@ -20,6 +20,10 @@
 // a peak that is loud (-1.5 ... -0.5 dBFS) but not clipping; the random models of 11, 12 and 20 keep
 // out of that band (test 21's) - under -1.5 dBFS, and now and then a clip that is not full scale
 // (-0.5 ... -0.1: one step, as always) - and their answer-for-answer comparisons then still hold.
+// Build 42: 22-25 are the AM rules (tick's am: rule 1 only for a real clip, rule 2 never above the tune's
+// gain) on made-up XEKAM 950 / KBRT 740 signals; 26 checks over random seconds that without am every
+// answer is build 41's (GainKeeper41 compiled in, see gainkeepertest_38.sh), and 27 the AM rules' two
+// promises over random seconds.
 package io.github.derek20la.hidefradio
 
 import java.util.Random
@@ -391,6 +395,117 @@ fun main() {
     check("a REAL clip (0 dBFS) still acts at once (${m.firstOrNull()})", m.isNotEmpty() && m[0] == "15s 19.7->16.6")
     m = loud({ -1.3f }, fm = true, start = 144)
     check("loud every second (KOST at 14.4 in LA, -1.3): down on the 3rd second (${m.firstOrNull()})", m.isNotEmpty() && m[0] == "3s 14.4->12.5")
+
+
+    // ---------------- Build 42: AM (tick's am) ----------------
+    // [peakOf] = the peak at a gain (each second, before [extra]); [locked] = HD in sync each second.
+    fun amRun(start: Int, seconds: Int, am: Boolean, sweepChose: Boolean = true, locked: (Int) -> Boolean = { true },
+              peakOf: (Int, Int) -> Float): Pair<Int, List<String>> {
+        val k = GainKeeper(STEPS); k.restart(0)
+        var g = start; val moves = ArrayList<String>()
+        for (t in 1..seconds) {
+            val to = k.tick(t * 1000L, g, peakOf(g, t), locked(t), 0, 0f, 0f, sweepChose, false, true, -99f, am)
+            if (to != GainKeeper.NO_CHANGE) { moves.add("${t}s ${g / 10.0}->${to / 10.0}"); g = to }
+        }
+        return g to moves
+    }
+    // XEKAM 950 on a V4: the peak hardly follows the gain past ~30 dB (the chain compresses) - about -8 dBFS everywhere up there.
+    val xekam = { g: Int, _: Int -> if (g >= 297) -8f else -8f - (297 - g) / 10f }
+    println("22. Build 42, AM: the tune's search chose 33.8 dB (XEKAM 950: peak ~ -8 dBFS at every gain from 30 dB up) - 10 minutes")
+    var (endG, mv) = amRun(338, 600, am = true, peakOf = xekam)
+    println("   build 42: " + (if (mv.isEmpty()) "no change" else mv.joinToString(", ")))
+    check("rule 2 never climbs above the tune's gain on AM: stays on 33.8 dB (ends ${endG / 10.0})", endG == 338 && mv.isEmpty())
+    // (build 41's rule 2 on AM: one step up, then - while in sync - it waits for a MER try that never comes on AM;
+    //  out of sync it climbs on. So the contrast is shown out of sync: Digital only before the first sync, a fade.)
+    var (endOld, mvOld) = amRun(338, 600, am = false, sweepChose = false, locked = { false }, peakOf = xekam)
+    println("   as build 41 (AM, no sweep, out of sync): ends on ${endOld / 10.0} dB after ${mvOld.size} steps up")
+    check("... where build 41's AM rules climbed to the top step", endOld == 496)
+    val (endNoSync, mvNoSync) = amRun(338, 600, am = true, locked = { false }, peakOf = xekam)
+    check("no HD sync for 10 minutes (an analog-only station, or a fade): still never above 33.8 - no lift on AM (ends ${endNoSync / 10.0}, ${mvNoSync.size} changes)",
+          endNoSync == 338 && mvNoSync.isEmpty())
+
+    // KBRT 740 on a V4: the dongle's own oscillator leaks in at -740 kHz, -1 ... -2.5 dBFS at 28-38 dB.
+    val kbrt = { g: Int, t: Int -> if (g >= 280) -1.2f - (t % 5) * 0.3f else -1.2f - (280 - g) / 10f }
+    println("23. Build 42, AM: KBRT 740 at 33.8 dB with the V4's leak at -1.2 ... -2.4 dBFS (not a clip) - 2 minutes")
+    val (end23, mv23) = amRun(338, 120, am = true, peakOf = kbrt)
+    println("   build 42: " + (if (mv23.isEmpty()) "no change" else mv23.joinToString(", ")))
+    check("rule 1 leaves it alone: stays on 33.8 dB (ends ${end23 / 10.0})", end23 == 338 && mv23.isEmpty())
+    val (end23o, mv23o) = amRun(338, 120, am = false, sweepChose = false, peakOf = kbrt)
+    println("   as build 41: " + mv23o.joinToString(", ") + "  (ends ${end23o / 10.0})")
+    check("... where build 41's AM rule 1 stepped down at the first second over -1.5 (${mv23o.firstOrNull()})", mv23o.isNotEmpty() && mv23o[0] == "5s 33.8->32.8")
+
+    println("24. Build 42, AM: a REAL clip - one step at once; a converter full two seconds running - 6 dB, as on FM")
+    // -0.3 dBFS at 33.8 for 20 s (a strong station close by), 3 dB quieter per step down
+    val (end24a, mv24a) = amRun(338, 20, am = true) { g, t -> if (t in 5..20) minOf(0f, -0.3f - (338 - g) / 10f) else -3f - (338 - g) / 10f }
+    println("   -0.3 dBFS from 5 s: " + mv24a.joinToString(", "))
+    check("a clip that is not full scale: one step down at once (${mv24a.firstOrNull()}), and on down while it clips",
+          mv24a.isNotEmpty() && mv24a[0] == "5s 33.8->32.8" && end24a < 338)
+    val (_, mv24b) = amRun(338, 20, am = true) { g, t -> if (t >= 5) minOf(0f, 3f - (338 - g) / 10f) else -3f }
+    println("   full scale (0.0) from 5 s: " + mv24b.joinToString(", "))
+    check("full scale: one step on the first full second, 6 dB once still full the next (${mv24b.take(2).joinToString(", ")})",
+          mv24b.size >= 2 && mv24b[0] == "5s 33.8->32.8" && mv24b[1] == "7s 32.8->25.4")
+
+    println("25. Build 42, AM: after rule 1 stepped down, rule 2 comes back up to the tune's gain when it is quiet again - never beyond")
+    // loud (-0.2 dBFS, a clip) for 10 s at 33.8, then quiet (-12 dBFS, the peak still following the gain below 33.8)
+    val (end25, mv25) = amRun(338, 600, am = true) { g, t -> if (t <= 10) minOf(0f, -0.2f - (338 - g) / 10f) else -12f - (338 - g) / 10f }
+    println("   " + mv25.joinToString(", ") + "  (ends ${end25 / 10.0})")
+    check("down on the clip, back up to 33.8 when quiet, not above it (ends ${end25 / 10.0}, top ${mv25.maxOfOrNull { it.substringAfter("->").toDouble() }})",
+          end25 == 338 && mv25.none { it.substringAfter("->").toDouble() > 33.8 })
+
+    println("26. Build 42: tick without am (= false) - every answer the same as build 41's GainKeeper (FM and AM, sweeps, MER tries, rule 4, any peak)")
+    val old41 = try { Class.forName("io.github.derek20la.hidefradio.GainKeeper41") } catch (e: ClassNotFoundException) { null }
+    if (old41 == null) println("   (skipped: GainKeeper41 is not compiled in - see gainkeepertest_38.sh)")
+    else {
+        val k41 = old41.getConstructor(IntArray::class.java).newInstance(STEPS)
+        val tick41 = old41.getMethod("tick", Long::class.java, Int::class.java, Float::class.java, Boolean::class.java, Int::class.java,
+                                     Float::class.java, Float::class.java, Boolean::class.java, Boolean::class.java, Boolean::class.java, Float::class.java)
+        val restart41 = old41.getMethod("restart", Long::class.java)
+        val k42 = GainKeeper(STEPS)
+        val rnd = Random(42)
+        var now = 0L; var gain = 207; var merCount = 0; var differ = 0; var moves = 0; var tries = 0
+        var base = -8f; var locked = true; var sweep = true; var fm = true; var hdDec = true
+        k42.restart(0); restart41.invoke(k41, 0L)
+        repeat(300_000) { n ->
+            now += 1000
+            if (rnd.nextInt(400) == 0) { base = -30f + rnd.nextFloat() * 32f }
+            if (rnd.nextInt(120) == 0) locked = !locked
+            if (rnd.nextInt(3000) == 0) {
+                k42.restart(now); restart41.invoke(k41, now); gain = STEPS[rnd.nextInt(STEPS.size)]
+                sweep = rnd.nextBoolean(); fm = rnd.nextInt(4) != 0; hdDec = rnd.nextInt(5) != 0; locked = rnd.nextBoolean()
+            }
+            if (locked && n % 3 != 0) merCount++
+            val peak = if (rnd.nextInt(200) == 0) -99f else minOf(0f, base + (gain - 207) / 10f + rnd.nextFloat() * 3f)
+            val lo = 4f + (rnd.nextFloat() * 6f) - Math.abs(gain - 207) / 40f - (if (rnd.nextInt(6) == 0) 6f else 0f); val up = lo - 2f + rnd.nextFloat() * 4f
+            val quiet = if (hdDec && rnd.nextBoolean()) -99f else -30f - rnd.nextFloat() * 10f
+            val a = k42.tick(now, gain, peak, locked, merCount, lo, up, sweep, fm, hdDec, quiet)
+            val b = tick41.invoke(k41, now, gain, peak, locked, merCount, lo, up, sweep, fm, hdDec, quiet) as Int
+            if (a != b) differ++
+            if (a != GainKeeper.NO_CHANGE) { gain = a; moves++; if (k42.tryingTo >= 0) tries++ }
+        }
+        check("300,000 random seconds, $moves gain changes ($tries tries): $differ answers differ", differ == 0 && moves > 1000 && tries > 100)
+    }
+
+    println("27. Build 42, AM over random seconds (am = true, a tune's gain from the search each time): never above that gain, rule 1 only for a clip")
+    run {
+        val k = GainKeeper(STEPS)
+        val rnd = Random(4242)
+        var now = 0L; var gain = 338; var tuned = 338; var above = 0; var falseOverload = 0; var moves = 0; var base = -8f
+        k.restart(0)
+        repeat(300_000) {
+            now += 1000
+            if (rnd.nextInt(400) == 0) { base = -30f + rnd.nextFloat() * 31f }
+            if (rnd.nextInt(3000) == 0) { k.restart(now); gain = STEPS[10 + rnd.nextInt(STEPS.size - 10)]; tuned = gain }
+            val peak = if (rnd.nextInt(200) == 0) -99f else minOf(0f, base + (minOf(gain, 297) - 297) / 10f + rnd.nextFloat() * 2f)
+            val a = k.tick(now, gain, peak, rnd.nextInt(3) != 0, 0, 0f, 0f, true, false, true, -99f, true)
+            if (a != GainKeeper.NO_CHANGE) {
+                moves++
+                if (a > tuned) above++
+                if (a < gain && peak < GainKeeper.CLIP_DBFS && peak > -90f) falseOverload++   // down without a clip this second
+                gain = a
+            }
+        }
+        check("300,000 random seconds, $moves gain changes: $above above the tune's gain, $falseOverload down without a clip", above == 0 && falseOverload == 0 && moves > 200)
+    }
 
     println(if (fails == 0) "ALL PASS" else "$fails FAILED")
 }

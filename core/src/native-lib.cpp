@@ -182,8 +182,9 @@ static std::atomic<bool> g_gainAuto{true};     // chosen by our auto-gain (true)
 static std::atomic<bool> g_direct{false};
 // Build 32: THE SAME THING OVER rtl_tcp. A V3 behind an rtl_tcp server goes to direct sampling
 // on AM by itself too, but the server can't tell us (iqsource_tcp.hpp: directSampling() is always
-// false), and the gain commands then do nothing there. doAutoGain() notices it instead: the gains
-// it tried span 15 dB or more and the peaks it measured hardly moved (GAIN_NO_EFFECT_*). Then
+// false), and the gain commands then do nothing there. The AM auto-gain notices it instead: the
+// gains it tried span 20 dB or more and the peaks it measured hardly moved (GAIN_NO_EFFECT_*;
+// build 42: doAutoGainAm(), with a look at the tuner's lowest step for it). Then
 // it is treated like direct sampling: g_gainTenths = -1 (the Gain row says so, the watchdog stands
 // still, nothing goes into GainMemory). Only on the rtl_tcp source AND on AM: on USB the driver
 // tells us (g_direct), and on FM the tuner is always in use.
@@ -194,7 +195,11 @@ static std::atomic<int> g_gainSearchMs{-1};         // how long the auto-gain to
 // Build 39: true = this tune's gain was chosen by the FM quality sweep (doAutoGainFm() found HD
 // sidebands and picked the gain where they stand out best). The watchdog (GainKeeper.kt) then
 // treats that gain as tested: it doesn't climb above it on the peak alone, and only such a gain
-// is remembered (GainMemory.kt). False on AM, on manual gain and on FM stations without HD.
+// is remembered (GainMemory.kt). False on manual gain and on FM stations without HD.
+// Build 42: on AM true whenever doAutoGainAm() chose the gain - by its HD figure, or without HD
+// the middle gain. Either way the watchdog must not climb above it because the peak looks quiet
+// (on the V4's AM input the peak hardly follows the gain past ~30 dB - that is how the peak rule
+// got to 49.6 dB), and GainKeeper.kt's AM rules (its tick's [am]) take care of that.
 static std::atomic<bool> g_gainSwept{false};
 // Build 39a: ... and how far the HD sideband stood out of the noise at that gain (tenths of a
 // dB) - GainMemory keeps it with the gain, so the next tune can tell with ONE look whether the
@@ -1216,152 +1221,46 @@ static void onNrsc5Event(const nrsc5_event_t *evt, void * /* opaque */) {
 //    is still in a sensible range, use it and skip the search (faster).
 //    *usedHint says whether that happened.
 //
-// Build 39: this is the whole auto-gain on AM only. On FM it is the first step, and the gain
+// Build 39: this was the whole auto-gain on AM only. On FM it is the first step, and the gain
 // it finds is then judged by how well the HD sidebands stand out of the noise - see
-// doAutoGainFm() below (FM never passes a hint or checkEffect here).
+// doAutoGainFm() below, which has its own copy of the search, burst for burst.
 //
-// Returns the chosen gain (tenths of dB), or -1 on error.
+// Build 42: and on AM it is gone too. On the V4's HF input "the highest gain that stays under
+// -4 dBFS" was the wrong question (XEKAM 950 ended on the top step, 49.6 dB, where its HD doesn't
+// decode; KBRT 740 on 25.4, 3 dB short of its best) - see gainscore.hpp's AM part. AM has its own
+// search now, doAutoGainAm() below, and the function that was here (doAutoGain(), with its
+// measurePeak()) has no caller left, so it went. The rule itself lives on in step 1 of the FM
+// search, and so do these numbers:
 static const float AUTO_TARGET_DBFS = -4.0f;    // search: highest gain whose peak stays below this
-static const float HINT_MAX_DBFS = -1.5f;       // remembered gain: louder than this = no (= the watchdog's limit; AM only
-                                                //   since build 41 - FM uses HINT_MAX_FM_DBFS, see doAutoGainFm())
-static const float HINT_MIN_DBFS = -10.0f;      //   ... quieter than this = signals got weaker, search again
+static const float HINT_MAX_DBFS = -1.5f;       // FM: the top of the "competes with the search" range for a remembered
+                                                //   gain (see doAutoGainFm(); until build 41 also AM's limit for one)
 // Build 32 (rtl_tcp on AM only, see g_gainNoEffect): "the gain has no effect" = the tried gains
 // span at least this much ...
-static const int   GAIN_NO_EFFECT_SPAN_TENTHS = 200;  // 20 dB: when every answer is the same the search runs to
-                                                      // one end (R820T, 29 steps: 25.4 -> 49.6 or -> 0 dB = 24-25 dB;
-                                                      // a remembered gain + the far end: at least half the range)
+static const int   GAIN_NO_EFFECT_SPAN_TENTHS = 200;  // 20 dB (build 42: the AM search looks at the tuner's LOWEST
+                                                      // step and its first gain, 25.4 dB on a V4 - see doAutoGainAm())
 // ... and the peaks measured at them differ by less than this. A working gain moves the peak
 // dB for dB (until the signal clips at 0 dBFS), so 20 dB of gain = some 20 dB of peak. At ONE
 // gain the AM band's peak still wobbles from burst to burst: over 5 bursts (one search) KBRT 740
 // spreads 0.8 dB (median; 95 % 1.4, worst 1.8), KMZT 1260 3.0 dB (95 % 4.4, worst 5.2) - measured
-// on the recordings. 6 dB is above that wobble and far below what a working gain does. (If the
-// level the server delivers happens to sit right at the target, the search goes up and down and
-// may not span 20 dB: then nothing is said, as before build 32 - a false "no", never a false "yes".)
+// on the recordings. 6 dB is above that wobble and far below what a working gain does.
+// Build 42: ... below ~25 dB, that is. On the V4's HF input the peak stops following the gain
+// somewhere past 28-30 dB (the tuner chain is compressing - gainscore.hpp), so two gains up
+// THERE could look like "no effect" on a dongle whose gain works perfectly well. Hence the
+// lowest step: from 0 dB to 25 dB even a compressing V4 moves the peak by a lot more than 6 dB.
 // A peak this close to full scale is clipping, not "no effect" (the gain may well work, the signal
 // is just too strong at every step tried) - not counted either.
 static const float GAIN_NO_EFFECT_DB = 6.0f;
 static const float GAIN_NO_EFFECT_CLIP_DBFS = -0.5f;
-static const int   AUTO_GAIN_NO_EFFECT = -2;          // doAutoGain()'s answer for that case
-
-// Sets [gain] and measures the peak (dBFS) of a short burst of samples.
-// Returns false if the dongle didn't answer.
-static bool measurePeak(std::vector<uint8_t> &buf, int gain, float *peakDb) {
-    if (g_src->setGain(gain) != 0) {
-        LOGE("auto-gain: set_tuner_gain(%d) failed", gain);
-        return false;   // (nrsc5 would retry forever here; we give up instead)
-    }
-    int n = 0;
-    if (!g_src->readBurst(buf.data(), (int)buf.size(), &n)) {
-        LOGE("auto-gain: read_sync failed");
-        return false;
-    }
-    // Skip the first quarter (may still be from the previous gain).
-    uint8_t minS = 255, maxS = 0;
-    for (int j = n / 4; j < n; j++) {
-        if (buf[j] > maxS) maxS = buf[j];
-        if (buf[j] < minS) minS = buf[j];
-    }
-    *peakDb = 20.0f * log10f((maxS - minS + 1) / 256.0f);
-    LOGI("auto-gain: try %.1f dB -> peak %.1f dBFS", gain / 10.0f, *peakDb);
-    return true;
-}
-
-// Build 32: [checkEffect] (rtl_tcp on AM only) = also find out whether the gain does anything at
-// all (g_gainNoEffect). If it doesn't, returns AUTO_GAIN_NO_EFFECT and *chosenPeakDbfs = the
-// last peak measured. With checkEffect false nothing differs from build 31, call for call.
-static int doAutoGain(float *chosenPeakDbfs, int hintTenths, bool *usedHint, bool checkEffect) {
-    *usedHint = false;
-    std::vector<int> gains = g_src->gainSteps();        // the tuner's steps, low to high
-    if (gains.empty()) return -1;
-    int count = (int)gains.size();
-
-    g_src->setGainMode(true);                           // manual gain
-    std::vector<uint8_t> buf(128 * 256);                 // same size nrsc5 uses (~11 ms)
-    float db = 0.0f;
-
-    // Build 32: the gains tried and the peaks they gave (min / max), for the "no effect" check.
-    int triedLo = INT_MAX, triedHi = INT_MIN;
-    float peakLo = 99.0f, peakHi = -99.0f;
-    auto note = [&](int gain, float peak) {
-        triedLo = std::min(triedLo, gain); triedHi = std::max(triedHi, gain);
-        peakLo = std::min(peakLo, peak); peakHi = std::max(peakHi, peak);
-    };
-    auto noEffect = [&]() {
-        return checkEffect && triedHi - triedLo >= GAIN_NO_EFFECT_SPAN_TENTHS &&
-               peakHi - peakLo < GAIN_NO_EFFECT_DB && peakHi < GAIN_NO_EFFECT_CLIP_DBFS;
-    };
-    auto reportNoEffect = [&]() {
-        LOGI("auto-gain: the gain has no effect (%.1f ... %.1f dB tried, peak %.1f ... %.1f dBFS) - "
-             "the rtl_tcp server's dongle is probably in direct sampling", triedLo / 10.0f, triedHi / 10.0f, peakLo, peakHi);
-        *chosenPeakDbfs = db;
-        return AUTO_GAIN_NO_EFFECT;
-    };
-
-    // M10c: first try the remembered gain (if it's one of this tuner's steps).
-    if (hintTenths >= 0 && std::find(gains.begin(), gains.end(), hintTenths) != gains.end()) {
-        if (!measurePeak(buf, hintTenths, &db)) return -1;
-        if (db < HINT_MAX_DBFS && db > HINT_MIN_DBFS) {
-            if (checkEffect) {
-                // Build 32: one look at the step farthest from it. (The remembered gain may come
-                // from a USB dongle on the same frequency; the server's may not obey at all.)
-                const float hintDb = db;
-                note(hintTenths, db);
-                int far = hintTenths - gains.front() >= gains.back() - hintTenths ? gains.front() : gains.back();
-                if (!measurePeak(buf, far, &db)) return -1;
-                note(far, db);
-                if (noEffect()) return reportNoEffect();
-                g_src->setGain(hintTenths);             // it works: back to the remembered gain
-                db = hintDb;
-            }
-            LOGI("auto-gain: remembered %.1f dB is fine (peak %.1f dBFS)", hintTenths / 10.0f, db);
-            *chosenPeakDbfs = db;
-            *usedHint = true;
-            return hintTenths;
-        }
-        LOGI("auto-gain: remembered %.1f dB doesn't fit now - searching", hintTenths / 10.0f);
-        if (checkEffect) note(hintTenths, db);
-    }
-
-    // The search: "higher or lower?" until we've found the highest gain
-    // whose peak is still below the target.
-    int low = 0, high = count - 1;
-    int bestGain = gains[0];
-    float bestDb = 0.0f;
-
-    while (low <= high) {
-        int mid = (low + high) / 2;
-        int gain = gains[mid];
-        if (!measurePeak(buf, gain, &db)) return -1;
-        if (checkEffect) note(gain, db);
-
-        if (db < AUTO_TARGET_DBFS) {    // still below the target: try higher
-            bestGain = gain;
-            bestDb = db;
-            low = mid + 1;
-        } else {                        // too loud: try lower
-            high = mid - 1;
-        }
-        if (high == -1) {               // even the lowest gain is loud: use it
-            bestGain = gain;
-            bestDb = db;
-        }
-    }
-
-    if (noEffect()) return reportNoEffect();            // build 32 (the gain stays where the search left it - it doesn't matter)
-    g_src->setGain(bestGain);
-    LOGI("auto-gain: chose %.1f dB (peak %.1f dBFS)", bestGain / 10.0f, bestDb);
-    *chosenPeakDbfs = bestDb;
-    return bestGain;
-}
+static const int   AUTO_GAIN_NO_EFFECT = -2;          // the AM search's answer for that case
 
 // ======================= Build 39: the FM auto-gain looks at the HD itself =======================
-// doAutoGain() above asks one question: "how loud is it?" (the peak). On FM that is not enough -
+// The peak rule above asks one question: "how loud is it?" (the peak). On FM that is not enough -
 // gainscore.hpp tells the story of 103.5 KOST, where the loudest gain that "fits" kills the HD.
 // So on FM (only) the search now goes on where the peak rule stops:
 //
 //  1. WHERE TO START. The gain remembered for this frequency, if there is one and it still
-//     shows HD at a sensible level. Otherwise the peak rule's answer (doAutoGain(), unchanged:
-//     the loudest gain the dongle's converter can take).
+//     shows HD at a sensible level. Otherwise the peak rule's answer (the search above, as it
+//     was in doAutoGain() until build 42: the loudest gain the dongle's converter can take).
 //  2. IS THERE HD? The burst at the starting gain, through gainscore::measure().
 //     If neither sideband looks like HD there, look LOWER (an overloaded tuner can bury the
 //     sidebands completely). Build 41: first at the gains the peak search has measured
@@ -1448,8 +1347,8 @@ static const float HINT_QUALITY_DROP_DB = 2.0f;       // a remembered gain whose
                                                       //   chosen is searched again (one burst's scatter is 0.3-0.5 dB; KOST on
                                                       //   the wrong side of its cliff: -5 dB, but jumping about +-1.5)
 
-// Sets [gain] and reads one burst - the same burst measurePeak() reads, first quarter skipped
-// the same way - and works out the peak and the HD figure from it. False if the dongle didn't answer.
+// Sets [gain] and reads one burst - the same burst nrsc5's search (and our measurePeak(), until
+// build 42) reads, first quarter skipped the same way - and works out the peak and the HD figure from it. False if the dongle didn't answer.
 static bool measureFm(std::vector<uint8_t> &buf, int gain, gainscore::Quality *q) {
     if (g_src->setGain(gain) != 0) {
         LOGE("auto-gain: set_tuner_gain(%d) failed", gain);
@@ -1468,8 +1367,8 @@ static bool measureFm(std::vector<uint8_t> &buf, int gain, gainscore::Quality *q
     return true;
 }
 
-// The FM auto-gain (see above). Returns the chosen gain (tenths of a dB) or -1 on error, like
-// doAutoGain(). [hintQuality] = what GainMemory knows about the remembered gain: -1 nothing
+// The FM auto-gain (see above). Returns the chosen gain (tenths of a dB) or -1 on error (like
+// doAutoGainAm() below). [hintQuality] = what GainMemory knows about the remembered gain: -1 nothing
 // (remembered by an older build), 0 = it was tested, >0 = tested, and the HD figure it had
 // then (tenths of a dB). *usedHint = the remembered gain was the one chosen; *swept = HD was
 // found and the gain was chosen by its quality (false = no HD: the peak rule's gain);
@@ -1486,7 +1385,7 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
     // What we know about each step so far.
     std::vector<gainscore::Quality> seen((size_t)count);
     std::vector<bool> measured((size_t)count, false);
-    std::vector<uint8_t> buf(128 * 256);                  // as doAutoGain(): ~11 ms
+    std::vector<uint8_t> buf(128 * 256);                  // as nrsc5's search: ~11 ms
     int tries = 0;
     auto look = [&](int i) {                              // measures step i (once)
         if (measured[(size_t)i]) return true;
@@ -1592,7 +1491,7 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
         else if (rival < 0) LOGI("auto-gain: remembered %.1f dB doesn't fit now - searching", hintTenths / 10.0f);
     }
     const bool fromHint = start >= 0;
-    // ... or the peak rule's gain: doAutoGain()'s "higher or lower?" search, step for step,
+    // ... or the peak rule's gain: the "higher or lower?" search (doAutoGain()'s until build 42), step for step,
     // with every burst kept for the walk.
     if (start < 0) {
         int low = 0, high = count - 1, a = 0;
@@ -1700,6 +1599,296 @@ static int doAutoGainFm(float *chosenPeakDbfs, int hintTenths, int hintQuality, 
     LOGI("auto-gain: chose %.1f dB by HD quality (%s sideband %.1f dB over the floor, peak %.1f dBFS; %d bursts)",
          gains[(size_t)chosen] / 10.0f, sideSign < 0 ? "lower" : "upper", side(chosen).overFloorDb, *chosenPeakDbfs, tries);
     return gains[(size_t)chosen];
+}
+
+// ======================= Build 42: the AM auto-gain looks at the HD itself too =======================
+// Why, and what "the HD figure" is: gainscore.hpp, its AM part. In short, on the V4 (the dongle
+// nearly everyone uses for AM - its R828D has a built-in upconverter for it) the AM band does not
+// behave as FM does:
+//   - past ~30 dB more gain makes nothing louder (the chain compresses), so the peak never says
+//     "enough": tuned to 950 kHz, the peak rule climbed to the top step, 49.6 dB, where XEKAM's HD
+//     is 5 dB worse than at 30-38 dB and doesn't decode;
+//   - and the loudest thing in our 1.5 MHz can be the V4's own oscillator leaking through (tuned
+//     to 740 kHz it sits at -740 kHz, -1 ... -3 dBFS at 28-38 dB). That says "enough" far too early
+//     (25.4 dB on 740, 3 dB worse for KBRT's HD than 33.8) and does no harm at those levels.
+// So the AM search doesn't ask the peak anything, except whether a gain really clips. It measures
+// the HD figure at a handful of gains and takes the best:
+//
+//  1. THE SWEEP. From AM_SWEEP_LOW_TENTHS (25.4 dB) up to the top step, in strides of at least
+//     AM_SWEEP_STRIDE_TENTHS (4 dB) - on a V4: 25.4, 29.7, 33.8, 38.6, 43.4, 49.6. Low to high, one
+//     burst each (AM_BURST_BYTES: 55 ms, five times FM's - the AM sidebands are narrow, and a narrow
+//     band takes longer to measure as well). It stops early
+//       - at a gain that CLIPS (a burst at AM_CLIP_DBFS or louder): higher would only clip more;
+//       - once the figure is AM_SURE_DB (3 dB) below the best so far: the top of the hill is behind
+//         us (950 on 11-25: 18.5-18.9 dB from 32.8 to 38.6, 13.7 at 49.6);
+//       - at AM_NOHD_TENTHS (33.8 dB) if no gain so far looks like HD (see 3).
+//  2. FURTHER DOWN, only if
+//       (a) even the first gain clips (a strong station close by): on down 6 dB at a time
+//           (AM_CLIP_DROP_TENTHS) until a gain doesn't clip, or the lowest step;
+//       (b) the figure at the bottom is CLEARLY better (by AM_CLEAR_DB) than at the gain above
+//           it - less gain helps, so the tuner is overloaded, as with 103.5 KOST on FM: on down
+//           4 dB at a time while that stays true (at most AM_DOWN_MAX more bursts). (Two bursts of
+//           the SAME signal differ by up to ~1 dB - XEKAM 950 at 32.8 dB: 18.9 and 18.1 a moment
+//           apart - so "a little better" means nothing here.)
+//     (A figure that is merely as good lower down is no reason: the plateau is wide - 29.7 to
+//     38.6 dB on 950 - and its lower end is close enough to where the dongle's own rounding noise
+//     starts to cost.)
+//  3. THE CHOICE.
+//       HD (at least AM_HD_MIN_GAINS gains look like it, or the only gain that doesn't clip does):
+//       the best figure - and of the gains within AM_TIE_DB of it, the LOWEST, which leaves the
+//       most room for a band that gets louder (the AM band at night). On the 11-25 ... 11-27
+//       recordings: 950 -> 29.7 ... 38.6 (never 49.6), 740 -> 33.8 (not 25.4).
+//       No HD (analog only, e.g. 640 KFI): nothing to judge by. The gain closest to
+//       AM_NOHD_TENTHS (33.8 dB), the middle of the V4's useful range - best or tied-best for the
+//       HD on every one of those recordings, so a sound choice for the analog as well - but never
+//       one that clips. (The peak rule took the top step for any station the leak didn't push down.)
+//
+// No remembered gain on AM: the sweep is quick (~0.5 s on a USB dongle; ~1 s over rtl_tcp, where
+// each gain change waits 0.12 s - longer when the samples come late, see the rtl_tcp check
+// below), and the right gain changes with the time of day - the AM band is a different place at night. [hintTenths] only goes into the log. Every burst is one line
+// in the log too.
+//
+// The watchdog (GainKeeper.kt) has AM rules to match (build 42): it never climbs above the gain
+// chosen here on the peak alone, and it steps down only for a real clip.
+static const int   AM_BURST_BYTES = 160 * 1024;       // one burst: 55 ms; the first quarter skipped, the rest = 3 pieces of 14 ms
+static const int   AM_SWEEP_LOW_TENTHS = 254;         // the sweep starts at the step nearest this (25.4 dB: KBRT 740 was 3 dB worse
+                                                      //   there than at 33.8; no recording was better lower down)
+static const int   AM_SWEEP_STRIDE_TENTHS = 40;       // ... and goes up at least this far at a time (4 dB: one burst's figure
+                                                      //   scatters +-0.5 dB, the plateau is some 10 dB wide)
+static const int   AM_NOHD_TENTHS = 338;              // no HD: the gain closest to this
+static const float AM_CLIP_DBFS = -0.5f;              // a burst this loud clips: that gain is out (= GAIN_NO_EFFECT_CLIP_DBFS, and
+                                                      //   GainKeeper's AM rule 1). KBRT 740 at 33.8: -1.2 (-0.7 at most) - the leak
+static const float AM_TIE_DB = 0.5f;                  // "as good as the best" (= SWEEP_TIE_DB on FM)
+static const float AM_SURE_DB = 3.0f;                 // "far worse" - the sweep up ends (= SWEEP_SURE_DB on FM)
+static const float AM_CLEAR_DB = 1.5f;                // "clearly better" - step 2b (= SWEEP_STOP_DB, FM's "clearly worse")
+static const int   AM_CLIP_DROP_TENTHS = 60;          // step 2a: each look lower is this far down (6 dB, as GainKeeper's CLIP_DROP_TENTHS)
+static const int   AM_DOWN_MAX = 3;                   // step 2b: at most this many more bursts
+static const int   AM_HD_MIN_GAINS = 2;               // HD = at least this many gains look like it (one lucky burst on a
+                                                      //   station without HD is not enough)
+static const int   AM_EFFECT_READS = 6;               // build 42b, rtl_tcp: bursts per gain when "no effect" is checked again
+                                                      //   (~0.175 s each - the 0.12 s wait + 55 ms: ~1 s per gain)
+
+// Sets [gain], reads one AM burst and works out the peak and the HD figure from it (first quarter
+// skipped, as on FM). [lateReads] (build 42b, rtl_tcp): that many bursts are read and thrown away
+// first - the samples come late (see doAutoGainAm). False if the dongle didn't answer.
+static bool measureAmBurst(std::vector<uint8_t> &buf, int gain, gainscore::AmQuality *q, int lateReads) {
+    if (g_src->setGain(gain) != 0) {
+        LOGE("auto-gain: set_tuner_gain(%d) failed", gain);
+        return false;
+    }
+    int n = 0;
+    for (int r = 0; r < lateReads; r++)
+        if (!g_src->readBurst(buf.data(), (int)buf.size(), &n)) {
+            LOGE("auto-gain: read_sync failed");
+            return false;
+        }
+    if (!g_src->readBurst(buf.data(), (int)buf.size(), &n) || n < (int)buf.size() / 2) {
+        LOGE("auto-gain: read_sync failed");
+        return false;
+    }
+    const int skip = (n / 4) & ~1;                        // bytes; whole IQ pairs
+    *q = gainscore::measureAm(buf.data() + skip, (n - skip) / 2, (double)SAMPLE_RATE);
+    LOGI("auto-gain (AM): try %.1f dB -> peak %.1f dBFS%s, HD %.1f dB over the floor%s (pieces %.1f / %.1f / %.1f; lower %.1f, upper %.1f)",
+         gain / 10.0f, q->peakDbfs, q->peakDbfs >= AM_CLIP_DBFS ? " - clips" : "", q->overFloorDb, q->hd ? "" : " (not HD)",
+         q->partDb[0], q->partDb[1], q->partDb[2], q->lowerDb, q->upperDb);
+    return true;
+}
+
+// The AM auto-gain (see above). Returns the chosen gain (tenths of a dB), -1 on error, or
+// AUTO_GAIN_NO_EFFECT ([checkEffect]: rtl_tcp - the gain changes nothing, see g_gainNoEffect).
+// *byHd = HD was found and the gain chosen by its figure (false: no HD, the middle gain);
+// *quality = that figure (tenths of a dB; 0 without HD).
+static int doAutoGainAm(float *chosenPeakDbfs, int hintTenths, bool checkEffect, bool *byHd, int *quality) {
+    *byHd = false;
+    *quality = 0;
+    const std::vector<int> gains = g_src->gainSteps();   // the tuner's steps, low to high
+    if (gains.empty()) return -1;
+    const int count = (int)gains.size();
+    g_src->setGainMode(true);                             // manual gain
+    if (hintTenths >= 0)
+        LOGI("auto-gain (AM): remembered %.1f dB not used - AM measures on every tune", hintTenths / 10.0f);
+
+    std::vector<gainscore::AmQuality> seen((size_t)count);
+    std::vector<bool> measured((size_t)count, false);
+    std::vector<uint8_t> buf(AM_BURST_BYTES);
+    int tries = 0;
+    int lateReads = 0;                                    // build 42b: rtl_tcp samples come late (see below)
+    auto look = [&](int i) {                              // measures step i (once)
+        if (measured[(size_t)i]) return true;
+        if (!measureAmBurst(buf, gains[(size_t)i], &seen[(size_t)i], lateReads)) return false;
+        measured[(size_t)i] = true;
+        tries++;
+        return true;
+    };
+    auto clips = [&](int i) { return seen[(size_t)i].peakDbfs >= AM_CLIP_DBFS; };
+    auto fig = [&](int i) { return seen[(size_t)i].overFloorDb; };
+    auto usable = [&](int i) { return measured[(size_t)i] && !clips(i); };
+    auto nearest = [&](int tenths) {
+        int b = 0;
+        for (int i = 1; i < count; i++) if (std::abs(gains[(size_t)i] - tenths) < std::abs(gains[(size_t)b] - tenths)) b = i;
+        return b;
+    };
+    auto below = [&](int at, int drop) {                  // the highest step at least [drop] below step [at] (or step 0)
+        int k = at - 1;
+        while (k > 0 && gains[(size_t)at] - gains[(size_t)k] < drop) k--;
+        return std::max(k, 0);
+    };
+
+    // 1. The gains of the sweep: from the one nearest AM_SWEEP_LOW_TENTHS up in strides, and the
+    //    top step always (it takes the place of the last stride if that one is closer than a stride).
+    std::vector<int> sweep(1, nearest(AM_SWEEP_LOW_TENTHS));
+    for (int i = sweep[0] + 1; i < count; i++)
+        if (gains[(size_t)i] - gains[(size_t)sweep.back()] >= AM_SWEEP_STRIDE_TENTHS) sweep.push_back(i);
+    if (sweep.back() != count - 1) {
+        if (sweep.size() > 1 && gains[(size_t)count - 1] - gains[(size_t)sweep.back()] < AM_SWEEP_STRIDE_TENTHS) sweep.back() = count - 1;
+        else sweep.push_back(count - 1);
+    }
+
+    // Build 32, over rtl_tcp: does the gain do anything at all? Asked of the tuner's lowest step and
+    // the sweep's first gain (see GAIN_NO_EFFECT_*). If it doesn't (the server's dongle is in direct
+    // sampling), there is nothing to search. The lowest step is not one to choose from - it is
+    // forgotten again (and measured anew should step 2 get down there).
+    //
+    // Build 42b: ... and do the samples come on time? Over Wi-Fi they can arrive well after the
+    // server took them - a backlog in the server's and the network's buffers, from a few hundred
+    // ms to a second or more, and it comes and goes. Each burst waits only 0.12 s after a gain
+    // change (BURST_SETTLE_S, iqsource_tcp.hpp). Build 42 asked with two gains back to back, and
+    // with a backlog BOTH bursts still showed the gain from before: a V4 whose gain works fine
+    // looked like "no effect" on most tunes of 740 over rtl_tcp (2026-11-28; the replay server
+    // reproduces it with --gain-effect 254 --lag 0.5). So now ONE gain change at a time, and we
+    // wait for it to show:
+    //   - one burst as it comes, before any change (whatever gain was set before: the reference);
+    //   - the lowest step, then up to AM_EFFECT_READS bursts (~1 s) until the peak moves 6 dB
+    //     (GAIN_NO_EFFECT_DB) away from the reference;
+    //   - not moved (the gain before may have been just as quiet - or the samples are more than
+    //     ~1 s late): the sweep's first gain, and up to AM_EFFECT_READS bursts until it moves UP
+    //     from where the lowest step left it. A move DOWN there is the lowest step's change coming
+    //     in late (so the gain works), and then it waits up to AM_EFFECT_READS more for the step up.
+    // Not moved in all of that (~2.3 s, once per AM tune): "no effect". Moved: the burst it moved
+    // in says how late the samples are, and every burst of the sweep reads that many first
+    // (lateReads), so each gain is judged by its own samples, not by the gain before it. With
+    // only one change in flight, the first burst that differs can only be that change's.
+    if (checkEffect && sweep[0] > 0) {
+        auto peakOfBurst = [&](float *p) {
+            int n = 0;
+            if (!g_src->readBurst(buf.data(), (int)buf.size(), &n) || n < (int)buf.size() / 2) return false;
+            tries++;
+            const int skip = (n / 4) & ~1;
+            *p = gainscore::measureAm(buf.data() + skip, (n - skip) / 2, (double)SAMPLE_RATE).peakDbfs;
+            return true;
+        };
+        float ref = 0.0f, lo, hi;
+        if (!peakOfBurst(&ref)) return -1;
+        lo = hi = ref;
+        int moved = -1, movedPass = -1, read = 1;
+        bool lateDown = false;                            // the lowest step's change came only in the second pass
+        const int order[2] = {0, sweep[0]};
+        for (int pass = 0; pass < 2 && moved < 0; pass++) {
+            if (g_src->setGain(gains[(size_t)order[pass]]) != 0) return -1;
+            for (int r = 0, limit = AM_EFFECT_READS; r < limit; r++) {
+                float p = 0.0f;
+                if (!peakOfBurst(&p)) return -1;
+                read++;
+                lo = std::min(lo, p);
+                hi = std::max(hi, p);
+                if (pass == 0) {                          // the only change in flight: either way counts
+                    if (std::fabs(p - ref) >= GAIN_NO_EFFECT_DB) { moved = r; movedPass = 0; break; }
+                    if (r == limit - 1) ref = p;          // the second pass: away from where this one left it
+                } else if (p >= ref + GAIN_NO_EFFECT_DB || p >= GAIN_NO_EFFECT_CLIP_DBFS) {
+                    moved = r; movedPass = 1; break;      // UP: the sweep's first gain showing
+                } else if (p <= ref - GAIN_NO_EFFECT_DB && !lateDown) {
+                    // DOWN: the lowest step's change, still on its way when the first pass gave up -
+                    // more than ~1 s late. The gain works; wait as long again for the step up.
+                    lateDown = true;
+                    ref = p;
+                    limit += AM_EFFECT_READS;
+                    LOGI("auto-gain (AM): %.1f dB showed only now - the samples come more than a second late", gains[0] / 10.0f);
+                }
+            }
+        }
+        if (moved < 0 && lateDown) { moved = 2 * AM_EFFECT_READS - 1; movedPass = 1; }   // works, the step up never showed: wait the most
+        // (Two gains less than GAIN_NO_EFFECT_SPAN_TENTHS apart prove nothing either way - a tuner
+        // with a narrow range: then the gain is taken to work, as since build 32.)
+        const bool span = gains[(size_t)sweep[0]] - gains[0] >= GAIN_NO_EFFECT_SPAN_TENTHS;
+        if (moved < 0 && span && hi < GAIN_NO_EFFECT_CLIP_DBFS) {
+            LOGI("auto-gain: the gain has no effect (%.1f ... %.1f dB tried, %d bursts, peak %.1f ... %.1f dBFS) - "
+                 "the rtl_tcp server's dongle is probably in direct sampling",
+                 gains[0] / 10.0f, gains[(size_t)sweep[0]] / 10.0f, read, lo, hi);
+            *chosenPeakDbfs = hi;
+            return AUTO_GAIN_NO_EFFECT;
+        }
+        // Moved in the first burst after a DOWN step: nothing late (a burst's peak is its loudest
+        // sample, so a burst half old, half new would still have looked loud). Otherwise one more
+        // than it took, to be safe - the backlog comes and goes.
+        lateReads = moved < 0 ? 0 : (moved == 0 && movedPass == 0) ? 0 : moved + 1;
+        if (lateReads > 0)
+            LOGI("auto-gain (AM): the samples come late (the gain showed in burst %d after setting %.1f dB) - "
+                 "each gain of the sweep waits %d more burst(s)", moved + 1, gains[(size_t)order[movedPass]] / 10.0f, lateReads);
+    }
+
+    // 1. (cont.) Low to high, with the early stops.
+    const int middle = nearest(AM_NOHD_TENTHS);
+    float best = -99.0f;
+    bool anyHd = false;
+    for (const int i : sweep) {
+        if (!look(i)) return -1;
+        if (clips(i)) break;                                              // higher only clips more
+        anyHd = anyHd || seen[(size_t)i].hd;
+        best = std::max(best, fig(i));
+        if (anyHd && fig(i) < best - AM_SURE_DB) break;                   // the top of the hill is behind us
+        if (!anyHd && gains[(size_t)i] >= gains[(size_t)middle]) break;   // no HD up to the middle: no HD (step 3)
+    }
+
+    // 2. Further down? (a) The first gain clips: 6 dB at a time until one doesn't.
+    int bottom = sweep[0];
+    while (clips(bottom) && bottom > 0) {
+        bottom = below(bottom, AM_CLIP_DROP_TENTHS);
+        if (!look(bottom)) return -1;
+    }
+    //    (b) The figure at the bottom is clearly better than at the gain above it: on down while
+    //    that stays true. ("Above" = the next gain of the sweep that was measured and doesn't clip.)
+    int above = -1;
+    for (const int i : sweep) if (i > bottom && usable(i)) { above = i; break; }
+    for (int more = 0; more < AM_DOWN_MAX && above >= 0 && bottom > 0 && !clips(bottom) &&
+                       seen[(size_t)bottom].hd && fig(bottom) > fig(above) + AM_CLEAR_DB; more++) {
+        LOGI("auto-gain (AM): %.1f dB is clearly better than %.1f dB (%.1f against %.1f) - looking lower",
+             gains[(size_t)bottom] / 10.0f, gains[(size_t)above] / 10.0f, fig(bottom), fig(above));
+        const int next = below(bottom, AM_SWEEP_STRIDE_TENTHS);
+        if (!look(next)) return -1;
+        above = bottom;
+        bottom = next;
+    }
+
+    // 3. The choice.
+    int usableCount = 0, hdCount = 0;
+    best = -99.0f;
+    for (int i = 0; i < count; i++) {
+        if (!usable(i)) continue;
+        usableCount++;
+        if (seen[(size_t)i].hd) { hdCount++; best = std::max(best, fig(i)); }
+    }
+    int choice = -1;
+    if (hdCount > 0 && hdCount >= std::min(AM_HD_MIN_GAINS, usableCount)) {
+        for (int i = count - 1; i >= 0; i--)                              // the LOWEST gain within AM_TIE_DB of the best
+            if (usable(i) && seen[(size_t)i].hd && fig(i) >= best - AM_TIE_DB) choice = i;
+        *byHd = true;
+        *quality = std::max(1, (int)lroundf(fig(choice) * 10.0f));
+        LOGI("auto-gain (AM): chose %.1f dB by HD quality (HD %.1f dB over the floor, the best %.1f; peak %.1f dBFS; %d bursts)",
+             gains[(size_t)choice] / 10.0f, fig(choice), best, seen[(size_t)choice].peakDbfs, tries);
+    } else if (usableCount > 0) {
+        for (int i = 0; i < count; i++)                                   // the usable gain nearest the middle (the lower of two)
+            if (usable(i) && (choice < 0 || std::abs(gains[(size_t)i] - AM_NOHD_TENTHS) < std::abs(gains[(size_t)choice] - AM_NOHD_TENTHS)))
+                choice = i;
+        LOGI("auto-gain (AM): no HD sidebands - %.1f dB, the middle of the range (peak %.1f dBFS; %d bursts)",
+             gains[(size_t)choice] / 10.0f, seen[(size_t)choice].peakDbfs, tries);
+    } else {
+        for (int i = 0; i < count && choice < 0; i++) if (measured[(size_t)i]) choice = i;   // everything clips: the lowest tried
+        LOGI("auto-gain (AM): every gain tried clips - %.1f dB, the lowest (peak %.1f dBFS; %d bursts)",
+             gains[(size_t)choice] / 10.0f, seen[(size_t)choice].peakDbfs, tries);
+    }
+    g_src->setGain(gains[(size_t)choice]);
+    *chosenPeakDbfs = seen[(size_t)choice].peakDbfs;
+    return gains[(size_t)choice];
 }
 
 // ======================= Milestone 4: streaming =======================
@@ -2138,7 +2327,7 @@ static void streamThreadMain() {
 
 // Kotlin (RadioEngine): external fun startStreamNative(freqHz: Int, gainTenthsDb: Int, hintTenthsDb: Int, hintQualityTenths: Int): String
 // gainTenthsDb: tuner gain in tenths of a dB (0 = 0.0 dB, 496 = 49.6 dB),
-//               or negative = automatic (nrsc5-style auto-gain, doAutoGain()).
+//               or negative = automatic (doAutoGainFm() on FM; build 42: doAutoGainAm() on AM).
 // hintTenthsDb (M10c): automatic only - the gain remembered for this
 //               frequency (try it first), or -1 = none.
 // hintQualityTenths (build 39a, FM): what GainMemory knows about that gain - see doAutoGainFm().
@@ -2202,12 +2391,16 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
         Clock::time_point searchStart = Clock::now();     // M10c: time just the gain part
         // Build 32: on rtl_tcp + AM, also check that the gain does anything (see g_gainNoEffect).
         const bool checkEffect = std::strcmp(g_src->kind(), "rtl_tcp") == 0 && freqHz < AM_BELOW_HZ;
-        // Build 39: FM gets the search that looks at the HD sidebands (doAutoGainFm); AM keeps
-        // the peak search as it was, call for call.
+        // Build 39: FM gets the search that looks at the HD sidebands (doAutoGainFm). Build 42: AM
+        // too, its own (doAutoGainAm) - with or without HD, the gain it chooses counts as "swept":
+        // the watchdog doesn't climb above it on the peak alone (see g_gainSwept).
+        const bool am = freqHz < AM_BELOW_HZ;
         bool swept = false;
+        bool amByHd = false;
         int quality = 0;
-        int chosen = freqHz < AM_BELOW_HZ ? doAutoGain(&peak, hintTenthsDb, &usedHint, checkEffect)   // takes well under a second
-                                          : doAutoGainFm(&peak, hintTenthsDb, hintQualityTenths, &usedHint, &swept, &quality);
+        int chosen = am ? doAutoGainAm(&peak, hintTenthsDb, checkEffect, &amByHd, &quality)   // ~0.5 s (USB), ~1 s (rtl_tcp)
+                        : doAutoGainFm(&peak, hintTenthsDb, hintQualityTenths, &usedHint, &swept, &quality);
+        if (am && chosen >= 0) swept = true;
         if (chosen == AUTO_GAIN_NO_EFFECT) {
             gainText = "gain has no effect (the server's dongle is probably in direct sampling)";
             g_gainNoEffect = true;
@@ -2217,10 +2410,11 @@ Java_io_github_derek20la_hidefradio_RadioEngine_startStreamNative(
             gainText = "gain auto FAILED - using tuner AGC";
         } else {
             snprintf(gbuf, sizeof(gbuf), "gain %.1f dB (auto%s%s, peak %.1f dBFS)",
-                     chosen / 10.0f, usedHint ? ", remembered" : "", swept ? ", by HD quality" : "", peak);
+                     chosen / 10.0f, usedHint ? ", remembered" : "",
+                     am ? (amByHd ? ", AM, by HD quality" : ", AM, no HD: the middle gain") : swept ? ", by HD quality" : "", peak);
             gainText = gbuf;
-            g_gainSwept = swept;                          // build 39
-            if (swept) { g_gainQuality = quality; g_gainSweptTenths = chosen; }   // build 39a
+            g_gainSwept = swept;                          // build 39 (build 42: AM too)
+            if (swept) { g_gainQuality = am && !amByHd ? -1 : quality; g_gainSweptTenths = chosen; }   // build 39a
         }
         g_gainTenths = chosen;                            // 9d (-1 = tuner AGC)
         g_gainAuto = true;
@@ -2691,7 +2885,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
              g_mode == NRSC5_MODE_AM ? 1 : 0,          // 9c
              g_direct.load() ? 1 : 0,                  // 14c: direct sampling (no tuner gain)
              g_gainNoEffect.load() ? 1 : 0,            // build 32: rtl_tcp on AM, the gain does nothing
-             g_gainSwept.load() ? 1 : 0,               // build 39: FM, the gain was chosen by HD quality
+             g_gainSwept.load() ? 1 : 0,               // build 39: FM, the gain was chosen by HD quality (build 42: AM, by doAutoGainAm())
              g_gainTenths.load() == g_gainSweptTenths.load() ? g_gainQuality.load() : -1,   // build 39a: its HD figure, while that gain is set
              src == SOURCE_ANALOG ? "analog" : src == SOURCE_AUTO ? "auto" : "hd", demodWanted() ? 1 : 0,
              g_fmCarrierDb.load(), g_fmQuietDb.load(), g_fmOffsetHz.load(), g_fmLoadPct.load(), g_hdLoadPct.load());
@@ -2848,7 +3042,7 @@ Java_io_github_derek20la_hidefradio_RadioEngine_getSignalNative(JNIEnv* env, job
 // gain setting. librtlsdr picks the nearest step the tuner supports.
 // Returns the gain now set (tenths of a dB), or -1 if the dongle isn't open.
 // (Going back to "Auto" needs a restart of the stream instead, because
-// doAutoGain() has to measure before streaming starts.)
+// the auto-gain has to measure before streaming starts.)
 // Must run on the engine thread (never at the same time as a tune).
 extern "C" JNIEXPORT jint JNICALL
 Java_io_github_derek20la_hidefradio_RadioEngine_setGainNative(

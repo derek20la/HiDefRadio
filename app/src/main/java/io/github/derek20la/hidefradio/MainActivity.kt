@@ -939,7 +939,7 @@ class MainActivity : AppCompatActivity() {
                     s.merLower, s.merUpper, Signal.percent(s.ber))
         }
         // 9e step 3: too much gain -> a warning sign on the line too.
-        val line = if (running && s.peakDbfs > OVERLOAD_DBFS) "$text  ⚠" else text
+        val line = if (running && overloaded(s)) "$text  ⚠" else text
         binding.signalDot.setTextColor(color(dotColor))
         binding.signalLine.text = line
 
@@ -1092,7 +1092,7 @@ class MainActivity : AppCompatActivity() {
             cn < AM_WEAK_DB -> "$meter ${getString(R.string.signal_weak)}$st"
             else -> "$meter$st"
         }
-        val overload = s.peakDbfs > OVERLOAD_DBFS
+        val overload = overloaded(s)                  // build 42: AM's own limit (see overloaded())
         val color = when {
             measuring -> R.color.signal_off
             cn < AM_NOISE_DB -> R.color.signal_lost
@@ -1197,7 +1197,7 @@ class MainActivity : AppCompatActivity() {
             // the signal gets distorted and HD is lost. Harmless, but lower the gain.
             // (M10c: on auto, the watchdog lowers it by itself.)
             "Peak" to f("%.1f dBFS", s.peakDbfs) +
-                if (s.peakDbfs > OVERLOAD_DBFS) " - $overload" else "",
+                if (overloaded(s)) " - $overload" else "",
             "Offset" to "${s.offsetHz} Hz",
             // M10b: + "sound" = from asking for the station until you hear it
             // (includes stopping the old station, auto-gain and the pre-buffer).
@@ -2242,6 +2242,15 @@ class MainActivity : AppCompatActivity() {
 
         // 9e step 3: Peak above this = overload (too much gain).
         private const val OVERLOAD_DBFS = -1.0f
+        // Build 42: ... on AM only a real clip (= GainKeeper.CLIP_DBFS, native AM_CLIP_DBFS). On a V4
+        // the loudest thing in the AM window can be the dongle's own oscillator leaking through
+        // (tuned to 740 kHz: -1 ... -3 dBFS at the gain that is best for KBRT's HD); "overload! Lower
+        // the gain" there was a false alarm (640 KFI at 28.0 dB, -0.6 dBFS).
+        private const val AM_OVERLOAD_DBFS = -0.5f
+
+        /** 9e step 3 / build 42: is the Peak an overload (FM: above -1.0 dBFS; AM: a real clip)? */
+        private fun overloaded(s: Signal): Boolean =
+            s.peakDbfs > (if (s.am) AM_OVERLOAD_DBFS else OVERLOAD_DBFS)
         // 9k: FM quieting (dB, positive = how far the noise is pushed down), from the
         // Sept 28 recordings: empty 90.5 = 8, Z90 fading = 12, weak KGGI = 31,
         // KZNO/KDAY = 38-40, KKLA = 44, KLOS = 50. Below NOISE = red "noise",

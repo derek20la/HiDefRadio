@@ -14,7 +14,8 @@ import android.content.Context
  * Build 39: on FM the remembered gain is no longer taken on its peak alone.
  * It is where the quality sweep STARTS (doAutoGainFm): it has to show HD
  * and is compared with its neighbours. And only a tested gain gets in here
- * (GainKeeper.gainTrusted). AM is as it was.
+ * (GainKeeper.gainTrusted). AM is as it was - and since build 42 the AM auto-gain measures on
+ * every tune (doAutoGainAm in native-lib.cpp) and only logs a remembered AM gain.
  *
  * Build 39a: for such a tested FM gain a second note is kept (SharedPreferences
  * "gain_quality"): how far the HD sideband stood out of the noise when the gain

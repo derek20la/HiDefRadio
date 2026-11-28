@@ -19,6 +19,11 @@ Two ways to send:
   --live: like a real server - samples flow from the moment of connecting, in real time
       (--speed 1), whatever the client does; a retune just carries on in the file.
 --cut-after S: close the connection after S seconds of samples (a server that dies / Wi-Fi gone).
+--gain-effect T (build 42b): the gain commands WORK - every sample is scaled by the commanded gain
+      against T (tenths of a dB: the gain the recording was made at), through the 8 bits as a dongle
+      would (rounded, clipped). Without it the gain does nothing (a server in direct sampling).
+--lag S (build 42b, with --gain-effect): a gain command shows in the samples only S seconds of
+      samples later - the backlog in a real server's and the network's buffers (Wi-Fi).
 --tuner / --gains: what the greeting says (default 5 = R820T, 29 steps).
 One client, then it exits. Plain Python 3, no packages.
 """
@@ -34,6 +39,8 @@ tuner = opt('--tuner', 5, int)
 gains = opt('--gains', 29, int)
 trace = opt('--trace', None)
 cut_after = opt('--cut-after', None, float)
+gain_ref = opt('--gain-effect', None, int)
+lag = opt('--lag', 0.0, float)
 live = '--live' in args
 if live: args.remove('--live')
 path = args[0]
@@ -69,15 +76,26 @@ def commands():
             line = f"{names.get(cmd, hex(cmd))} {val}"
             if log: log.write(line + '\n'); log.flush()
             if cmd == 1 and not tuned.is_set(): tuned.set()
+            if cmd == 4 and gain_ref is not None:          # --gain-effect: takes effect --lag seconds of samples later
+                pending.append((sent + int(lag * RATE) * 2, val))
+pending = []           # (byte position from which it shows, gain in tenths) - --gain-effect
+sent = 0
+def table(g):          # one byte -> the same sample at gain g (8 bits, rounded, clipped)
+    k = 10 ** ((g - gain_ref) / 200.0)
+    return bytes(max(0, min(255, int(round((v - 127.5) * k + 127.5)))) for v in range(256))
 threading.Thread(target=commands, daemon=True).start()
 
 if not live:
     tuned.wait(); time.sleep(0.2)
-sent = 0; t0 = time.monotonic()
+t0 = time.monotonic(); cur = gain_ref; tab = table(gain_ref) if gain_ref is not None else None
 with open(path, 'rb') as f:
     while True:
         b = f.read(CHUNK)
         if not b: break
+        if tab is not None:
+            while pending and pending[0][0] <= sent:
+                cur = pending.pop(0)[1]; tab = table(cur)
+            b = b.translate(tab)
         try:
             conn.sendall(b)
         except OSError:

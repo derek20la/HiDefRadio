@@ -599,6 +599,78 @@ sync -> lower" walk at the start of a tune. Plus one fix to fix 1: "HD" found at
   clipping patience (AM: one step at once, as before). Tests 11, 12 and 20 keep their random
   peaks out of -1.5 ... -0.5 dBFS (test 21's band), so their answer-for-answer checks still hold.
 
+## The AM auto-gain (build 42): amgaintest, GAINFILES on AM, gainkeepertest 22-27
+
+Until build 41 AM used the peak rule alone (the highest gain whose peak stays under -4 dBFS). On a V4
+that went wrong both ways (XEKAM 950 and KBRT 740 recordings of 11-24 ... 11-27): past ~30 dB the AM
+input compresses and the peak hardly moves, so on 950 the search climbed to 49.6 dB (HD 5 dB worse,
+no audio); on 740 the V4's own 28.8 MHz oscillator leaks in at -740 kHz, is the loudest thing in the
+window, and stopped the search at 25.4 (3 dB below KBRT's best). Build 42 measures the AM HD itself:
+`gainscore::measureAm()` (primary sidebands 10.5-14.5 kHz over the noise at 16.5-19 kHz, median of 3
+pieces of a 55 ms burst) and `doAutoGainAm()` in native-lib.cpp (a sweep 25.4 / 29.7 / 33.8 / 38.6 /
+43.4 / 49.6, the lowest gain within 0.5 dB of the best; no HD = the gain nearest 33.8; the peak only
+as a clip guard at -0.5 dBFS). GainKeeper's `am` flag: rule 1 only for a real clip, rule 2 never above
+the tune's gain.
+
+    build/amgaintest file.cu8 [...]      # the AM HD figure over a recording, one burst every 0.25 s (AMEVERY=1.0)
+
+It agrees with the field test's numpy figures within ~0.3 dB on every file (950 at 49.6: 13.8; 32.8 ...
+38.6: 18.5-18.8; 740 at 25.4 / 28.0 / 33.8 / 38.6: 14.2 / 16.2 / 17.4 / 16.8; 640 KFI: 0.0). Every
+other carrier in those recordings (30-odd stations, analog only): 0 +- 2 dB median, so HD = 6 dB.
+
+Searches - `GAINFILES` with one recording per gain, 16 tunes 0.5 s apart (`GAINSTART`), Digital, 1 s:
+
+| set (gains recorded) | build 41 | build 42 |
+|---|---|---|
+| 950 11-25 10:44 (32.8 33.8 36.4 38.6 49.6), `GAINSTEPS=files` | 49.6 x16 | 32.8 x13, 38.6 x3 |
+| 950 11-25 08:12 (29.7 49.6), files | 49.6 x16 | 29.7 x16 |
+| 950 11-27 (32.8 33.8 36.4 37.2), files | 37.2 x16 (the top) | 32.8 x3, 37.2 x13 |
+| 740 11-27 (25.4 28.0 33.8 38.6), files | 25.4 x16 | 33.8 x9, 38.6 x6, 25.4 x1 |
+| 740 11-27, V4 steps | 25.4 x16 | 29.7 (= the 28.0 file) x6, 33.8 x8, 38.6 / 43.4 x2 |
+| 740 11-21 Irvine (25.4 28.0 29.7), files | 25.4 x12, 28.0 x3, 29.7 x1 | 29.7 x13, 25.4 x3 |
+| 640 KFI (22.9 28.0), V4 steps | 25.4 x16 | no HD: 33.8 x14, 29.7 x2 (33.8 = the 28.0 file, which clips now and then) |
+| 950 10:44 set, `GAINHINT=496` | remembered 49.6 x16 | never 49.6 (AM doesn't use a remembered gain) |
+
+With the V4's 29 steps the gains nobody recorded replay the nearest recording (25.4 on 950 = the 32.8
+file, 43.4 / 49.6 on 740 = the 38.6 file), so those picks say little. The recordings of one set were
+made minutes apart and the 740 ones swing 3-4 dB within a second: a replayed sweep compares gains at
+DIFFERENT moments, a real one within half a second - most of the scatter above is that. A Monte Carlo
+of the rule with one burst's real scatter (+-0.45 dB) and simultaneous bursts: 0.08-0.25 dB below the
+best on average; a second look at the close call would gain ~0.05 dB - not done.
+
+End to end (950 10:44 set, Digital, 25 s): build 41 49.6 dB, sync lost, BER 11.2 %, no audio; build 42
+32.8 dB, BER 6.5 %, audio and "XEKA". `DONGLE=V3`: no gain call at all, as before.
+
+**Build 42b - rtl_tcp: late samples.** On the phone (V4 over rtl_tcp, Wi-Fi, 740) build 42 said "gain
+has no effect" on most tunes: it compared 0.0 and 25.4 dB with two bursts back to back, and with a
+backlog in the server's / network's buffers both bursts still carried the gain from before (each
+burst waits only 0.12 s, `BURST_SETTLE_S`). `rtltcp_replay.py` has two new options to reproduce it:
+`--gain-effect T` (the commanded gain scales the samples against T tenths, through the 8 bits) and
+`--lag S` (a gain command shows S seconds of samples later). Build 42 with `--live --tuner 6
+--gain-effect 254 --lag 0.5` on the 740 25.4 file: "no effect", as on the phone. Build 42b: one
+reference burst, then ONE gain change at a time (0.0 dB, then the sweep's first gain - only a move UP
+counts there, a move down is the first change arriving late), each watched for up to 6 bursts; the
+burst the peak moved in = how late the samples are, and every sweep burst reads that many more first:
+
+| lag | build 42 | build 42b | 25.4 / 29.7 / 33.8 measured as | time |
+|---|---|---|---|---|
+| 0 | gain works | gain works | -6.6 / -2.1 / clips | 0.8 s |
+| 0.3 s | "no effect" | works, 3 bursts late | -6.4 / -2.1 / clips | 2.7 s |
+| 0.5 s | "no effect" | works, 4 bursts late | -6.1 / -2.4 / clips | 3.4 s |
+| 1.0 s | "no effect" | works (0.0 dB "only now"), 7 late | -6.5 / -2.0 / clips | 6.6 s |
+| 1.5 s | "no effect" | works, 10 late | -6.3 / -1.9 / clips | 8.7 s |
+| gain ignored (direct sampling) | no effect, 0.3 s | no effect, 13 bursts | | 2.2 s |
+
+(Without the late reads a lagging sweep judges each gain by the one before it - 0.5 s lag: "25.4 dB"
+measured -30 dBFS, the 0.0 dB samples.) USB searches: unchanged, tune for tune. The FM sweep over
+rtl_tcp has the same blind spot (each burst waits 0.12 s) - not changed here.
+`regress.sh` (all at manual gain or FM): build 41 and build 42 identical, but for the port number.
+
+`gainkeepertest_38.sh` now also compiles build 41's GainKeeper (f3c7914, "GainKeeper41"): 60 checks,
+22-25 the AM rules on made-up 950 / 740 signals, 26 = without `am` every answer is build 41's (300,000
+random seconds, FM and AM, sweeps, tries, rule 4), 27 = with `am` never above the tune's gain and never
+down without a clip.
+
 ## A favorite's program (build 39b): programwishtest.kt
 
 `ProgramWish.kt` is the rule `RadioService` follows when a favorite asks for a program (HD1 at

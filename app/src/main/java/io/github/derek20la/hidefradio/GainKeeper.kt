@@ -110,6 +110,22 @@ package io.github.derek20la.hidefradio
  *     step makes the quieting [QUIET_WORSE_DB] worse than before the walk, this is no overload:
  *     back at once, no more steps. (Digital only: no analog, no check - and nothing to lose.)
  *
+ * Build 42 - AM ([tick]'s am; left out = AM exactly as in build 41). The tune's auto-gain on
+ * AM now looks at the HD too (doAutoGainAm in native-lib.cpp), because on the V4's AM input the
+ * peak says little about the gain: past ~30 dB it hardly moves (the tuner chain compresses - on
+ * XEKAM 950 the peak never reached -4 dBFS, so the old search went to the top step, 49.6 dB,
+ * where the HD doesn't decode), and the V4's own oscillator, leaking through at the bottom of the
+ * AM band, can be the loudest thing on screen at -1 ... -3 dBFS without doing any harm (KBRT 740
+ * at 33.8 dB, its best gain). Two rules had to follow:
+ *  - Rule 1 on AM acts only on a REAL clip, [CLIP_DBFS] (-0.5) or louder - as the tune's search
+ *    does. Then one step down, or [CLIP_DROP_TENTHS] at once for a converter that is full two
+ *    seconds running (as on FM). -1.5 ... -0.5 dBFS on AM is that leak, not an overload.
+ *  - Rule 2 on AM never climbs above the gain the tune chose ([tick]'s sweepChose is true for every
+ *    AM tune now, with or without HD), and that limit is never lifted: "quiet, so up" is exactly
+ *    how the old AM rules ended on 49.6 dB. Below it, rule 2 works as before (back up after rule 1
+ *    stepped down, once it is quiet again).
+ *  Rules 3 and 4 never run on AM: nrsc5 sends no MER on AM, and rule 4 is FM only.
+ *
  * Which MER? The BETTER of the two sidebands. The worse one is often limited
  * by a station next door (e.g. KKGO's upper sideband by 105.3 KIOZ), which no
  * gain setting can fix, and it jumps around - it would only add noise.
@@ -243,12 +259,14 @@ class GainKeeper(steps: IntArray) {
      * [hdDecoding] (build 41) = the HD decoder runs (Auto or Digital only, not Analog only), and
      * [quietDb] = the analog FM's quieting (Signal.fmQuietDb, -99 = not measured): rule 4.
      * Left out, rule 4 never runs.
+     * [am] (build 42) = the station is on AM: rule 1 only for a real clip, rule 2 never above the
+     * tune's gain (see the top). false = every answer as in build 41 (fm = false was "AM" until then).
      * Returns the gain to switch to (tenths of a dB), or [NO_CHANGE].
      */
     fun tick(nowMs: Long, gainTenths: Int, peakDbfs: Float,
              locked: Boolean, merCount: Int, merLower: Float, merUpper: Float,
              sweepChose: Boolean = false, fm: Boolean = false,
-             hdDecoding: Boolean = false, quietDb: Float = -99f): Int {
+             hdDecoding: Boolean = false, quietDb: Float = -99f, am: Boolean = false): Int {
         if (steps.isEmpty()) return NO_CHANGE
 
         // Build 39: a new station - did the quality sweep choose its gain?
@@ -288,7 +306,9 @@ class GainKeeper(steps: IntArray) {
 
         // Rule 1: overload -> down, now. (Also ends a try.)
         // Build 41, FM: a real clip -> CLIP_DROP_TENTHS down in one go, else one step.
-        if (peakDbfs > OVERLOAD_DBFS && !waitAndSee) {
+        // Build 42, AM: only a real clip counts as an overload (see the top).
+        val overload = if (am) peakDbfs >= CLIP_DBFS else (peakDbfs > OVERLOAD_DBFS && !waitAndSee)
+        if (overload) {
             endTry()
             if (i == 0) return NO_CHANGE            // already at the lowest gain
             blockedIndex = i
@@ -297,7 +317,7 @@ class GainKeeper(steps: IntArray) {
             // ... and only for a converter that is FULL two seconds running: just under that, one step
             // (99.1 KGGI is at its best at 28.0 dB, -0.0 ... -0.6 dBFS - see the top).
             val fullScale = peakDbfs >= FULL_SCALE_DBFS && prevPeak >= FULL_SCALE_DBFS
-            val to = if (fm && fullScale) stepBelow(i, CLIP_DROP_TENTHS) else i - 1
+            val to = if ((fm || am) && fullScale) stepBelow(i, CLIP_DROP_TENTHS) else i - 1
             return change(nowMs, i, to, stays = true)
         }
 
@@ -344,7 +364,7 @@ class GainKeeper(steps: IntArray) {
         // Build 39: and not above the gain the quality sweep chose (see the top).
         // Build 41: and not while the MER is below zero (FM).
         if (recent.size == QUIET_TICKS && i < steps.lastIndex && mayGoUpTo(i + 1, nowMs) &&
-                !(locked && checkPending) && sweepAllows(i + 1, nowMs) && !merBad) {
+                !(locked && checkPending) && sweepAllows(i + 1, nowMs, am) && !merBad) {
             val loudest = recent.maxOrNull() ?: return NO_CHANGE
             if (loudest + rise(i) < TARGET_DBFS) {
                 // Went up by the peak alone -> check soon with a MER try DOWN
@@ -486,9 +506,10 @@ class GainKeeper(steps: IntArray) {
     /**
      * Build 39, rule 2 only: after a quality sweep, not above the highest tested step -
      * unless HD has been out of sync for [SWEEP_LIFT_MS] (then the peak is all we have).
+     * Build 42: on AM ([am]) never - there the peak is no guide to more gain at all (see the top).
      */
-    private fun sweepAllows(index: Int, nowMs: Long): Boolean =
-        sweepTop < 0 || index <= sweepTop || nowMs - lastLockedMs >= SWEEP_LIFT_MS
+    private fun sweepAllows(index: Int, nowMs: Long, am: Boolean): Boolean =
+        sweepTop < 0 || index <= sweepTop || (!am && nowMs - lastLockedMs >= SWEEP_LIFT_MS)
 
     private fun setCeiling(index: Int, nowMs: Long) {
         ceilingIndex = index
@@ -572,7 +593,8 @@ class GainKeeper(steps: IntArray) {
         const val SWEEP_LIFT_MS = 60_000L         // HD out of sync this long -> rule 2 may go above the sweep's gain again
 
         // Build 41 (FM only, see the top)
-        const val CLIP_DBFS = -0.5f               // rule 1: a peak this loud is a real clip (as native GAIN_NO_EFFECT_CLIP_DBFS)
+        const val CLIP_DBFS = -0.5f               // rule 1: a peak this loud is a real clip (as native GAIN_NO_EFFECT_CLIP_DBFS;
+                                                  //   build 42: AM's only overload, = native AM_CLIP_DBFS)
         const val CLIP_DROP_TENTHS = 60           // ... -> this far down at once (6 dB; on Long Beach's 11-23 recordings
                                                   //   28.0, 33.8 and 40.2 dB all read 0.0 dBFS on KLOS, KOST and KDAY)
         const val EARLY_MER_DB = 0f               // rule 3: "the HD is in trouble" = the better MER is below this ...

@@ -3,7 +3,8 @@
 ## Where we stopped (2026-11-24, end of the day)
 
 - Done: 0a (harness on the Mac, baseline) and 0 (the move into `core/`, phone test passed).
-- Next: step 0b (the C API), build 42.
+- Next: step 0b (the C API), build 43. (Build 42 went to the AM auto-gain - 1.4.2, committed on this
+  branch from the Lenovo, 2026-11-28; see `claude/Build_42_AM_autogain.md` in the claude.ai project.)
 - To decide first:
   1. Install Android's command-line build tools on the MacBook (Homebrew: a JDK, the SDK
      and the NDK), so phone builds no longer need the Lenovo. The commands are shown before
@@ -49,7 +50,7 @@ ngsoftfm from GitHub). Their paths were updated but not tested.
   deleted. rtl-sdr's own CMakeLists needs `Version.cmake`, so 0b must restore both.
 
 **Build number:** from now on, every step tested on the phone gets the next build number
-(`versionCode` in `app/build.gradle.kts`), so test installs can be told apart. Step 0b = build 42.
+(`versionCode` in `app/build.gradle.kts`), so test installs can be told apart. Step 0b = build 43 (42 = the AM auto-gain, 1.4.2).
 A release from `main` in the meantime must skip past the branch's numbers.
 
 ## Step 0a: the harness on the Mac (done, 2026-11-24)

@@ -36,7 +36,7 @@ android {
         // and must go up with every upload to Google Play. versionName is what people see.
         // Settings > About shows both: "Version 1.0-beta1 (build 1)".
         versionCode = 42
-        versionName = "1.4.1"       // build 41: FM auto-gain fixes (a bug-fix release on top of 1.4); build 42+: macOS port steps (branch macos-port), one per phone test
+        versionName = "1.4.2"       // build 42: AM auto-gain by HD quality (1.4.1 = build 41: FM auto-gain fixes); build 43+: macOS port steps (branch macos-port), one per phone test
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -102,4 +102,4 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
-}
+}
